@@ -1,0 +1,11 @@
+# 与 mcr.microsoft.com/playwright:v1.55.0-jammy 内置浏览器版本对齐
+FROM mcr.microsoft.com/playwright:v1.55.0-jammy
+
+WORKDIR /app
+
+COPY package.json package-lock.json* ./
+RUN npm ci || npm install
+
+COPY . .
+
+CMD ["npx", "playwright", "test"]

@@ -1,0 +1,58 @@
+services:
+  api:
+    build:
+      context: ./api
+    image: im3-api:latest
+    # 宿主端口由 API_PORT 覆盖（默认 8000）
+    ports:
+      - "${API_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/health', timeout=2).status == 200 else 1)"
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  web:
+    build:
+      context: ./web
+    image: im3-web:latest
+    # 宿主端口由 WEB_PORT 覆盖（默认 8080）
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  # 一次性验收服务：构建测试镜像 -> 等待 web/api 就绪 ->
+  # 对真实运行的 nginx + FastAPI 跑 Playwright（含真实 HTTP 请求），结束即退出。
+  # 运行：docker compose build verify && docker compose run --rm verify
+  verify:
+    build:
+      context: ./web
+      dockerfile: Dockerfile.verify
+    image: im3-verify:latest
+    environment:
+      PLAYWRIGHT_BASE_URL: http://web
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    entrypoint:
+      - sh
+      - -c
+      - |
+        for i in $$(seq 1 30); do
+          node -e "fetch('http://web/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" && break
+          echo "waiting for web... ($i)"; sleep 2
+        done
+        npx playwright test
