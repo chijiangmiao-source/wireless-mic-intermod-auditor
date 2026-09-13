@@ -1,5 +1,10 @@
 // 经真实 nginx 代理访问 FastAPI 的 HTTP 验收测试（不模拟任何服务）。
 import { expect, test } from '@playwright/test';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const baseURL = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:4173';
 
@@ -7,6 +12,19 @@ test('健康检查经 web 代理到达 api', async ({ request }) => {
   const resp = await request.get(`${baseURL}/api/health`);
   expect(resp.status()).toBe(200);
   expect((await resp.json()).status).toBe('ok');
+});
+
+test('web 配置契约：nginx 双栈监听且健康检查不依赖 localhost 解析', () => {
+  // 回归守卫：busybox wget 访问 localhost 可能解析到 ::1，
+  // 仅监听 IPv4 会使容器健康检查永远失败、verify 无法开始。
+  const nginxConf = fs.readFileSync(path.join(webRoot, 'nginx.conf'), 'utf8');
+  expect(nginxConf).toMatch(/listen\s+80\s*;/);
+  expect(nginxConf).toMatch(/listen\s+\[::\]:80\s*;/);
+
+  const dockerfile = fs.readFileSync(path.join(webRoot, 'Dockerfile'), 'utf8');
+  expect(dockerfile).toMatch(/HEALTHCHECK/);
+  expect(dockerfile).toMatch(/http:\/\/127\.0\.0\.1\/health/);
+  expect(dockerfile).not.toMatch(/http:\/\/localhost\/health/);
 });
 
 test('真实 POST 返回可用结论', async ({ request }) => {
