@@ -70,6 +70,23 @@ def test_invalid_name_returns_422_located_by_index_and_field():
     assert all(e["index"] != 0 for e in errors if e["field"] == "name")
 
 
+def test_blank_name_and_extra_field_on_same_item_both_reported():
+    # 页面回归：同一项同时有额外字段与空名称时，不能只报额外字段
+    plan = [
+        {"id": 11, "frequency": 480.0},
+        {"id": 22, "frequency": 500.0, "name": "", "band": "UHF"},
+    ]
+    resp = client.post("/api/conflicts", json=plan)
+    assert resp.status_code == 422
+    errors = resp.json()["errors"]
+    assert any(
+        e["index"] == 1 and e["field"] is None and "非法字段" in e["message"]
+        for e in errors
+    )
+    name_errors = [e for e in errors if e["index"] == 1 and e["field"] == "name"]
+    assert name_errors and "1 至 40" in name_errors[0]["message"]
+
+
 def test_candidate_endpoint_rejects_named_baseline_channels():
     resp = client.post(
         "/api/candidate",

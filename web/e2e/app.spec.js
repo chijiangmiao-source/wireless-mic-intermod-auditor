@@ -137,7 +137,7 @@ test.describe('三阶互调频率协调页面', () => {
     expect(hit33.sources.find((s) => s.id === 11).name).toBe('主唱麦');
   });
 
-  test('含空名称的新文件：按 name 字段定位错误且不残留旧分析、收窄与候选结论', async ({ page }) => {
+  test('含空名称与额外字段的新文件：两类错误都按同一频道定位，且不残留旧分析、收窄与候选结论', async ({ page }) => {
     // 先上传带名称的合法文件得到冲突结论
     await page.getByTestId('file-input').setInputFiles(fixtures('named-conflict.json'));
     await expect(page.getByTestId('result-conflict')).toBeVisible();
@@ -153,15 +153,19 @@ test.describe('三阶互调频率协调页面', () => {
     await page.getByTestId('candidate-evaluate-button').click();
     await expect(page.getByTestId('candidate-safe')).toBeVisible();
 
-    // 上传含空名称的新文件
+    // 上传同一频道同时含空名称与额外字段的新文件
     await page.getByTestId('file-input').setInputFiles(fixtures('invalid-name.json'));
 
     await expect(page.getByTestId('form-error')).toBeVisible();
     const items = page.getByTestId('error-item');
-    await expect(items).toHaveCount(1);
-    await expect(items.first()).toContainText('第 2 项');
-    await expect(items.first()).toContainText('name');
-    await expect(items.first()).toContainText('1 至 40');
+    // 不能只报额外字段：空 name 错误必须同时定位到同一频道（第 2 项）
+    await expect(items).toHaveCount(2);
+    await expect(items.nth(0)).toContainText('第 2 项');
+    await expect(items.nth(0)).toContainText('非法字段');
+    await expect(items.nth(0)).toContainText('band');
+    await expect(items.nth(1)).toContainText('第 2 项');
+    await expect(items.nth(1)).toContainText('name');
+    await expect(items.nth(1)).toContainText('1 至 40');
 
     // 旧分析、频道表、收窄与候选结论无残留
     await expect(page.getByTestId('result-conflict')).toHaveCount(0);

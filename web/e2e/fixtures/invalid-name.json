@@ -1,4 +1,4 @@
 [
   { "id": 11, "frequency": 480.000, "name": "主唱麦" },
-  { "id": 22, "frequency": 500.000, "name": "" }
+  { "id": 22, "frequency": 500.000, "name": "", "band": "UHF" }
 ]

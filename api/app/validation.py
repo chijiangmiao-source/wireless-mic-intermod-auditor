@@ -143,38 +143,39 @@ def validate_channels(
             errors.append(
                 {"index": index, "field": field, "message": "缺少必填字段"}
             )
-        if extra or missing:
-            continue
-
-        channel_id = item["id"]
+        # 不因额外/缺失字段早退：同项的 id/frequency/name 仍逐项校验，
+        # 使「额外字段 + 空名称」等组合错误能在同一次 422 中全部定位
         id_ok = False
-        if not is_int(channel_id):
-            errors.append(
-                {"index": index, "field": "id",
-                 "message": "频道编号必须是整数"}
-            )
-        elif not is_safe_integer(channel_id):
-            errors.append(
-                {"index": index, "field": "id",
-                 "message": unsafe_id_error(channel_id)}
-            )
-            seen_ids.add(channel_id)
-        elif channel_id in seen_ids:
-            errors.append(
-                {"index": index, "field": "id",
-                 "message": f"频道编号 {channel_id} 重复，每个编号必须唯一"}
-            )
-            seen_ids.add(channel_id)
-        else:
-            seen_ids.add(channel_id)
-            id_ok = True
+        khz: int | None = None
+        if "id" in item:
+            channel_id = item["id"]
+            if not is_int(channel_id):
+                errors.append(
+                    {"index": index, "field": "id",
+                     "message": "频道编号必须是整数"}
+                )
+            elif not is_safe_integer(channel_id):
+                errors.append(
+                    {"index": index, "field": "id",
+                     "message": unsafe_id_error(channel_id)}
+                )
+                seen_ids.add(channel_id)
+            elif channel_id in seen_ids:
+                errors.append(
+                    {"index": index, "field": "id",
+                     "message": f"频道编号 {channel_id} 重复，每个编号必须唯一"}
+                )
+                seen_ids.add(channel_id)
+            else:
+                seen_ids.add(channel_id)
+                id_ok = True
 
-        frequency = item["frequency"]
-        khz, frequency_error = check_frequency(frequency)
-        if frequency_error is not None:
-            errors.append(
-                {"index": index, "field": "frequency", "message": frequency_error}
-            )
+        if "frequency" in item:
+            khz, frequency_error = check_frequency(item["frequency"])
+            if frequency_error is not None:
+                errors.append(
+                    {"index": index, "field": "frequency", "message": frequency_error}
+                )
 
         # 可选业务名称：缺省为 None；存在即规范化并校验，错误按 name 字段定位，
         # 同批名称允许重复。名称错误不影响 id/frequency 的逐项检查。

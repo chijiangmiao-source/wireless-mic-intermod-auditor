@@ -86,6 +86,22 @@ def test_name_error_collected_alongside_other_field_errors():
     assert (1, "name") in fields
 
 
+def test_blank_name_reported_even_when_extra_field_present():
+    # 同一项同时含额外字段与空名称：两类错误都必须逐项返回，
+    # 不能因额外字段提前跳过名称校验
+    payload = [
+        {"id": 1, "frequency": 470.0},
+        {"id": 2, "frequency": 600.0, "name": "", "band": "UHF"},
+    ]
+    _channels, errors = validate_channels(payload, allow_name=True)
+    assert any(
+        e["index"] == 1 and e["field"] is None and "非法字段" in e["message"]
+        for e in errors
+    )
+    name_errors = [e for e in errors if e["index"] == 1 and e["field"] == "name"]
+    assert name_errors and "1 至 40" in name_errors[0]["message"]
+
+
 def test_name_rejected_when_allow_name_false():
     # 候选评估请求沿用原契约：基线项里出现 name 仍按非法字段拒绝
     _channels, errors = validate_channels(_pair("主唱麦"))
