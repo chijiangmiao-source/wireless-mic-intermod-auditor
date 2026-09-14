@@ -12,6 +12,15 @@ export function formatMHzWithUnit(khz) {
   return `${formatMHz(khz)} MHz`;
 }
 
+// 频道的可选业务名称（演员/腰包/机位）。后端仅在名称非空时返回 name 键，
+// 这里再做一次防御性归一化：未填写时返回 null，调用方据此只显示编号。
+export function channelDisplayName(channel) {
+  const name = channel?.name;
+  if (typeof name !== 'string') return null;
+  const trimmed = name.trim();
+  return trimmed ? trimmed : null;
+}
+
 // 与服务端一致的响应结构归一化
 export function summarizeStatus(body) {
   if (!body || typeof body !== 'object') return { kind: 'unknown' };

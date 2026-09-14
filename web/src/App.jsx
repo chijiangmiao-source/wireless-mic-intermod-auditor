@@ -2,6 +2,7 @@ import React, { useCallback, useRef, useState } from 'react';
 import { analyzeChannels, evaluateCandidate } from './api.js';
 import {
   buildDownloadPayload,
+  channelDisplayName,
   channelRoleLabel,
   conflictInvolvesChannel,
   formatMHz,
@@ -181,6 +182,11 @@ export default function App() {
       setCandidateFormError('基线输入不可用，请重新上传频道 JSON 文件');
       return;
     }
+    // 候选接口仍只接受 id 与 frequency：上传文件里的可选 name 在发请求前剥离，
+    // 旧格式契约不因名称功能而改变
+    const baseline = input
+      .filter((ch) => ch && typeof ch === 'object')
+      .map((ch) => ({ id: ch.id, frequency: ch.frequency }));
 
     // 超出安全整数范围的编号在发请求前拒绝：Number() 会静默舍入成相邻整数
     const parsedId = parseCandidateId(candidateIdText);
@@ -194,7 +200,7 @@ export default function App() {
 
     setCandidatePending(true);
     try {
-      const outcome = await evaluateCandidate(input, {
+      const outcome = await evaluateCandidate(baseline, {
         id: parsedId.value,
         frequency: parseCandidateField(candidateFreqText),
       });
@@ -302,7 +308,8 @@ export default function App() {
           <p>上传 JSON 文件后立即分析。文件内容示例：</p>
           <pre>{SAMPLE_JSON}</pre>
           <ul>
-            <li>每项仅含 <code>id</code>（唯一整数编号）与 <code>frequency</code>（MHz 数值）</li>
+            <li>每项含 <code>id</code>（唯一整数编号）与 <code>frequency</code>（MHz 数值），可另带可选 <code>name</code>（演员/腰包/机位业务名称）</li>
+            <li><code>name</code> 去除首尾空白后为 1–40 个字符，同批允许重复；空串或非字符串将整批 422，未填写时只显示编号</li>
             <li>任一字段非法、编号重复或数值非有限（NaN/Infinity），整批返回 422 并逐项列出错误</li>
           </ul>
         </section>
@@ -356,6 +363,9 @@ function ConflictPanel({ body, onDownload, selectedId, onToggleChannel }) {
   const visibleConflicts = selectedId == null
     ? body.conflicts
     : body.conflicts.filter((c) => conflictInvolvesChannel(c, selectedId));
+  const selectedChannel = selectedId == null
+    ? null
+    : body.channels.find((ch) => ch.id === selectedId) ?? null;
   return (
     <section className="panel conflict" data-testid="result-conflict" role="alert">
       <h2>⚠️ 冲突（CONFLICT）</h2>
@@ -365,9 +375,9 @@ function ConflictPanel({ body, onDownload, selectedId, onToggleChannel }) {
         处三阶互调冲突。发射机上电前请调整下列来源或受影响频道。
       </p>
 
-      {selectedId != null && (
+      {selectedChannel && (
         <p className="channel-filter" data-testid="channel-filter-banner" role="status">
-          已收窄为与频道 <strong>#{selectedId}</strong> 直接相关的{' '}
+          已收窄为与频道 <ChannelIdName channel={selectedChannel} /> 直接相关的{' '}
           <strong data-testid="filtered-conflict-count">{visibleConflicts.length}</strong>{' '}
           条冲突（共 {body.conflicts.length} 条）。再次点击该频道行即可恢复全部。
         </p>
@@ -487,10 +497,17 @@ function CandidateSection({
 }
 
 function ConflictCard({ conflict: c }) {
+  // 三只频道中任一带业务名称时，才展示名称辨认行与业务名称列；
+  // 整批未命名时维持原布局，只按编号辨认
+  const hasNames = [c.victim, ...c.sources].some(
+    (channel) => channelDisplayName(channel) !== null,
+  );
   return (
     <li className="conflict-card" data-testid="conflict-item">
       <div className="conflict-head">
-        <span className="badge">受影响频道 #{c.victim.id}</span>
+        <span className="badge">
+          受影响频道 <ChannelIdName channel={c.victim} />
+        </span>
         <span className="freq">接收频率 {formatMHzWithUnit(c.victim.frequency_khz)}</span>
         <span className="distance">
           产物偏差 {c.distance_khz} kHz ＝ {(c.distance_khz / 1000).toFixed(3)} MHz
@@ -499,6 +516,7 @@ function ConflictCard({ conflict: c }) {
       <p className="formula" data-testid="conflict-formula">
         计算式：{c.formula}
       </p>
+      {hasNames && <ConflictChannelNames conflict={c} />}
       <p className="product">
         互调产物频率：<strong>{formatMHzWithUnit(c.product_khz)}</strong>
       </p>
@@ -507,6 +525,7 @@ function ConflictCard({ conflict: c }) {
           <tr>
             <th>角色</th>
             <th>频道编号</th>
+            {hasNames && <th>业务名称</th>}
             <th>频率</th>
             <th>系数</th>
           </tr>
@@ -516,6 +535,7 @@ function ConflictCard({ conflict: c }) {
             <tr key={s.id} className="row-source">
               <td>来源（发射机）</td>
               <td>#{s.id}</td>
+              {hasNames && <td>{channelDisplayName(s) ?? '—'}</td>}
               <td>{formatMHzWithUnit(s.frequency_khz)}</td>
               <td>×{s.coefficient}</td>
             </tr>
@@ -523,6 +543,7 @@ function ConflictCard({ conflict: c }) {
           <tr className="row-victim">
             <td>受影响（接收机）</td>
             <td>#{c.victim.id}</td>
+            {hasNames && <td>{channelDisplayName(c.victim) ?? '—'}</td>}
             <td>{formatMHzWithUnit(c.victim.frequency_khz)}</td>
             <td>—</td>
           </tr>
@@ -532,10 +553,41 @@ function ConflictCard({ conflict: c }) {
   );
 }
 
+// 编号与业务名称：有名称时展示「#编号 名称」，未填写时只显示编号
+function ChannelIdName({ channel }) {
+  const name = channelDisplayName(channel);
+  return (
+    <>
+      #{channel.id}
+      {name && <span className="channel-name" data-testid="channel-name">（{name}）</span>}
+    </>
+  );
+}
+
+// 计算式旁的业务名称辨认行：按来源与受影响两个角色列出名称，
+// 未填写名称的频道只列编号
+function ConflictChannelNames({ conflict: c }) {
+  const sourceText = c.sources
+    .map((s) => {
+      const name = channelDisplayName(s);
+      return name ? `#${s.id} ${name}` : `#${s.id}`;
+    })
+    .join('、');
+  const victimName = channelDisplayName(c.victim);
+  const victimText = victimName ? `#${c.victim.id} ${victimName}` : `#${c.victim.id}`;
+  return (
+    <p className="channel-names" data-testid="conflict-channel-names">
+      业务名称 — 来源：{sourceText}；受影响：{victimText}
+    </p>
+  );
+}
+
 function ChannelTable({ channels, selectedId = null, onToggleChannel = null }) {
   if (!channels?.length) return null;
   // 冲突结果中传入 onToggleChannel：点击行收窄/恢复该频道的冲突明细
   const interactive = typeof onToggleChannel === 'function';
+  // 整批没有任何业务名称时不渲染名称列，未填写名称的批次继续只显示编号
+  const showNames = channels.some((ch) => channelDisplayName(ch) !== null);
   return (
     <details className="channel-details">
       <summary>
@@ -546,6 +598,7 @@ function ChannelTable({ channels, selectedId = null, onToggleChannel = null }) {
         <thead>
           <tr>
             <th>编号</th>
+            {showNames && <th>业务名称</th>}
             <th>频率 (MHz)</th>
             <th>角色</th>
             <th>来源次数</th>
@@ -555,6 +608,7 @@ function ChannelTable({ channels, selectedId = null, onToggleChannel = null }) {
         <tbody>
           {channels.map((ch) => {
             const selected = interactive && ch.id === selectedId;
+            const name = channelDisplayName(ch);
             return (
               <tr
                 key={ch.id}
@@ -579,6 +633,7 @@ function ChannelTable({ channels, selectedId = null, onToggleChannel = null }) {
                 }
               >
                 <td>#{ch.id}</td>
+                {showNames && <td data-testid="channel-name-cell">{name ?? '—'}</td>}
                 <td>{formatMHz(ch.frequency_khz)}</td>
                 <td data-testid="channel-role">{channelRoleLabel(ch.role)}</td>
                 <td>{ch.source_count ?? 0}</td>

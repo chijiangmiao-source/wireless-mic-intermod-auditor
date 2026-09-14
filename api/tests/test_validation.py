@@ -14,7 +14,7 @@ def valid_payload():
 def test_valid_channels_pass():
     channels, errors = validate_channels(valid_payload())
     assert errors == []
-    assert channels == [(1, 470_000), (2, 694_000)]
+    assert channels == [(1, 470_000, None), (2, 694_000, None)]
 
 
 @pytest.mark.parametrize(
@@ -36,7 +36,7 @@ def test_on_grid_quarter_steps_pass():
     ]
     channels, errors = validate_channels(payload)
     assert errors == []
-    assert [khz for _id, khz in channels] == [470_025, 512_375, 600_650]
+    assert [khz for _id, khz, _name in channels] == [470_025, 512_375, 600_650]
 
 
 @pytest.mark.parametrize("frequency", [469.975, 694.025, 0.0, -470.0, 1000.0])
@@ -67,7 +67,7 @@ def test_ids_beyond_safe_integer_range_rejected(channel_id):
     assert matched, errors
     assert any("安全整数" in e["message"] for e in matched)
     # 越界编号不得进入 channels
-    assert all(cid != channel_id for cid, _khz in channels)
+    assert all(cid != channel_id for cid, _khz, _name in channels)
     assert channels == []
 
 
@@ -79,7 +79,7 @@ def test_safe_integer_boundary_ids_accepted(channel_id):
     ]
     channels, errors = validate_channels(payload)
     assert errors == []
-    assert channels == [(1, 470_000), (channel_id, 480_000)]
+    assert channels == [(1, 470_000, None), (channel_id, 480_000, None)]
 
 
 def test_non_finite_frequency_rejected():

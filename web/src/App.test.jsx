@@ -743,3 +743,221 @@ describe('频道角色摘要与冲突收窄', () => {
     expect(items[1]).toHaveTextContent('编号 5 重复');
   });
 });
+
+describe('可选业务名称 name', () => {
+  // 与 conflictBody 同构，但 #11/#22 带业务名称，#33 未命名
+  const namedInput = [
+    { id: 11, frequency: 480.0, name: ' 主唱麦 ' },
+    { id: 22, frequency: 500.0, name: '吉他腰包' },
+    { id: 33, frequency: 520.0 },
+  ];
+  const namedConflictBody = {
+    status: 'conflict',
+    channel_count: 3,
+    conflict_count: 2,
+    channels: [
+      { id: 11, frequency_khz: 480000, frequency_mhz: 480.0, name: '主唱麦', source_count: 1, victim_count: 1, role: 'both' },
+      { id: 22, frequency_khz: 500000, frequency_mhz: 500.0, name: '吉他腰包', source_count: 2, victim_count: 0, role: 'source' },
+      { id: 33, frequency_khz: 520000, frequency_mhz: 520.0, source_count: 1, victim_count: 1, role: 'both' },
+    ],
+    conflicts: [
+      {
+        victim: { id: 11, frequency_khz: 480000, frequency_mhz: 480.0, name: '主唱麦' },
+        sources: [
+          { id: 22, frequency_khz: 500000, frequency_mhz: 500.0, name: '吉他腰包', coefficient: 2 },
+          { id: 33, frequency_khz: 520000, frequency_mhz: 520.0, coefficient: 1 },
+        ],
+        doubled_source_id: 22,
+        product_khz: 480000,
+        product_frequency_mhz: 480.0,
+        distance_khz: 0,
+        formula: '2×500.000 MHz − 520.000 MHz = 480.000 MHz（2f(频道22) − f(频道33)）',
+      },
+      {
+        victim: { id: 33, frequency_khz: 520000, frequency_mhz: 520.0 },
+        sources: [
+          { id: 11, frequency_khz: 480000, frequency_mhz: 480.0, name: '主唱麦', coefficient: 1 },
+          { id: 22, frequency_khz: 500000, frequency_mhz: 500.0, name: '吉他腰包', coefficient: 2 },
+        ],
+        doubled_source_id: 22,
+        product_khz: 520000,
+        product_frequency_mhz: 520.0,
+        distance_khz: 0,
+        formula: '2×500.000 MHz − 480.000 MHz = 520.000 MHz（2f(频道22) − f(频道11)）',
+      },
+    ],
+  };
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(200, namedConflictBody)));
+    if (!URL.createObjectURL) {
+      URL.createObjectURL = vi.fn(() => 'blob:fake');
+      URL.revokeObjectURL = vi.fn();
+    }
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function uploadNamed(user) {
+    const contents = JSON.stringify(namedInput);
+    const file = new File([contents], 'named-plan.json', { type: 'application/json' });
+    file.text = async () => contents;
+    const { unmount } = render(<App />);
+    await user.upload(screen.getByTestId('file-input'), file);
+    await waitFor(() =>
+      expect(screen.getByTestId('result-conflict')).toBeInTheDocument(),
+    );
+    return unmount;
+  }
+
+  it('频道表显示业务名称，未填写时显示破折号', async () => {
+    const user = userEvent.setup();
+    await uploadNamed(user);
+    await user.click(screen.getByText(/查看输入的 3 个频道/));
+
+    const rows = screen.getAllByTestId('channel-row');
+    const nameCells = rows.map((r) => within(r).getByTestId('channel-name-cell').textContent);
+    expect(nameCells).toEqual(['主唱麦', '吉他腰包', '—']);
+  });
+
+  it('冲突卡片在受影响徽标、名称辨认行与三频道表中显示名称，计算式保持编号', async () => {
+    const user = userEvent.setup();
+    await uploadNamed(user);
+
+    // 受影响频道 #33 的卡片：徽标只显示编号（#33 未命名）
+    const card33 = screen.getAllByTestId('conflict-item')[1];
+    expect(within(card33).getByText('受影响频道 #33')).toBeInTheDocument();
+    expect(within(card33).queryAllByTestId('channel-name')).toHaveLength(0);
+
+    // 计算式旁的名称辨认行：来源带名称、受影响只列编号
+    const namesLine = within(card33).getByTestId('conflict-channel-names');
+    expect(namesLine).toHaveTextContent('#11 主唱麦');
+    expect(namesLine).toHaveTextContent('#22 吉他腰包');
+    expect(namesLine).toHaveTextContent('受影响：#33');
+
+    // 三频道表新增业务名称列
+    const table = within(card33).getByTestId('three-channels');
+    const sourceNameCells = within(table).getAllByRole('row').slice(1, 3);
+    expect(sourceNameCells[0]).toHaveTextContent('主唱麦');
+    expect(sourceNameCells[1]).toHaveTextContent('吉他腰包');
+    expect(table.querySelector('.row-victim')).toHaveTextContent('—');
+
+    // 受影响频道命名时（第一张卡 #11）徽标带名称
+    const card11 = screen.getAllByTestId('conflict-item')[0];
+    expect(within(card11).getByText('受影响频道 #11')).toBeInTheDocument();
+    expect(within(card11).getByTestId('channel-name')).toHaveTextContent('（主唱麦）');
+    // 计算式本身仍只含编号，不含名称
+    expect(within(card11).getByTestId('conflict-formula')).not.toHaveTextContent('主唱麦');
+  });
+
+  it('候选请求只携带 id 与 frequency，name 在发请求前剥离', async () => {
+    const user = userEvent.setup();
+    stubFetchRouting(jsonResponse(200, namedConflictBody), jsonResponse(200, candidateSafeBody));
+    render(<App />);
+    const contents = JSON.stringify(namedInput);
+    const file = new File([contents], 'named-plan.json', { type: 'application/json' });
+    file.text = async () => contents;
+    await user.upload(screen.getByTestId('file-input'), file);
+    await waitFor(() =>
+      expect(screen.getByTestId('result-conflict')).toBeInTheDocument(),
+    );
+
+    await user.type(screen.getByTestId('candidate-id-input'), '4');
+    await user.type(screen.getByTestId('candidate-frequency-input'), '500.000');
+    await user.click(screen.getByTestId('candidate-evaluate-button'));
+    await waitFor(() =>
+      expect(screen.getByTestId('candidate-safe')).toBeInTheDocument(),
+    );
+
+    const call = fetch.mock.calls.find(([url]) => url === '/api/candidate');
+    const sent = JSON.parse(call[1].body);
+    expect(sent.channels).toEqual([
+      { id: 11, frequency: 480.0 },
+      { id: 22, frequency: 500.0 },
+      { id: 33, frequency: 520.0 },
+    ]);
+    expect(sent.candidate).toEqual({ id: 4, frequency: 500 });
+  });
+
+  it('JSON 下载同步携带名称：输入项与冲突明细都含 name', async () => {
+    const user = userEvent.setup();
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    await uploadNamed(user);
+
+    let captured = null;
+    // 直接读取 createObjectURL 收到的 Blob
+    URL.createObjectURL.mockImplementation((blob) => {
+      captured = blob;
+      return 'blob:fake';
+    });
+
+    await user.click(screen.getByTestId('download-button'));
+    const text = await new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.readAsText(captured);
+    });
+    const report = JSON.parse(text);
+    clickSpy.mockRestore();
+
+    expect(report.input_channels).toEqual(namedInput);
+    const named = report.conflicts.find((c) => c.victim.id === 11);
+    expect(named.victim.name).toBe('主唱麦');
+    expect(named.sources.find((s) => s.id === 22).name).toBe('吉他腰包');
+    const unnamed = report.conflicts.find((c) => c.victim.id === 33);
+    expect(unnamed.victim.name).toBeUndefined();
+  });
+
+  it('含空名称的新文件按 name 字段定位错误，并清除旧分析、收窄与候选结论', async () => {
+    const user = userEvent.setup();
+    const unmount = await uploadNamed(user);
+    // 先做收窄与一次候选评估，制造需要被清除的旧状态
+    await user.click(screen.getByText(/查看输入的 3 个频道/));
+    await user.click(screen.getAllByTestId('channel-row')[0]);
+    expect(screen.getByTestId('channel-filter-banner')).toBeInTheDocument();
+
+    stubFetchRouting(jsonResponse(200, namedConflictBody), jsonResponse(200, candidateSafeBody));
+    await user.type(screen.getByTestId('candidate-id-input'), '4');
+    await user.type(screen.getByTestId('candidate-frequency-input'), '500.000');
+    await user.click(screen.getByTestId('candidate-evaluate-button'));
+    await waitFor(() =>
+      expect(screen.getByTestId('candidate-safe')).toBeInTheDocument(),
+    );
+
+    // 上传含空名称的新文件：整批 422，旧结果、收窄横幅、候选结论全部清除
+    const errorBody = {
+      message: '频道数据校验未通过',
+      errors: [
+        { index: 1, field: 'name', message: "频道名称 '' 去除首尾空白后必须为 1 至 40 个字符" },
+      ],
+    };
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(422, errorBody)));
+    const badContents = JSON.stringify([
+      { id: 11, frequency: 480.0 },
+      { id: 22, frequency: 500.0, name: '' },
+    ]);
+    const badFile = new File([badContents], 'bad-name.json', { type: 'application/json' });
+    badFile.text = async () => badContents;
+    await user.upload(screen.getByTestId('file-input'), badFile);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('form-error')).toBeInTheDocument(),
+    );
+    const items = screen.getAllByTestId('error-item');
+    expect(items).toHaveLength(1);
+    expect(items[0]).toHaveTextContent('第 2 项');
+    expect(items[0]).toHaveTextContent('name');
+    expect(items[0]).toHaveTextContent('1 至 40');
+
+    // 旧分析、频道表、收窄与候选结论无残留
+    expect(screen.queryByTestId('result-conflict')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('result-clear')).not.toBeInTheDocument();
+    expect(screen.queryAllByTestId('channel-row')).toHaveLength(0);
+    expect(screen.queryByTestId('channel-filter-banner')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('candidate-panel')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('candidate-safe')).not.toBeInTheDocument();
+    unmount();
+  });
+});

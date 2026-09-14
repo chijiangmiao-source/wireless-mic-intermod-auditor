@@ -17,26 +17,50 @@ GRID_KHZ = 25
 HIT_TOLERANCE_KHZ = 75
 
 
-def find_conflicts(channels: Iterable[tuple[Any, int]]) -> list[dict[str, Any]]:
+def _channel_ref(
+    channel_id: Any, khz: int, name: str | None = None
+) -> dict[str, Any]:
+    """构造冲突明细里的频道引用。
+
+    名称为纯增量字段：未填写时不输出 ``name`` 键，旧格式批次的冲突明细
+    与既有响应逐字段一致。
+    """
+    ref: dict[str, Any] = {
+        "id": channel_id,
+        "frequency_khz": khz,
+        "frequency_mhz": khz / 1000,
+    }
+    if name is not None:
+        ref["name"] = name
+    return ref
+
+
+def find_conflicts(
+    channels: Iterable[tuple[Any, int] | tuple[Any, int, str | None]]
+) -> list[dict[str, Any]]:
     """计算所有三阶互调冲突。
 
     参数:
-        channels: ``(频道编号, 频率kHz)`` 的有序可迭代对象，频率已由上层校验为
-            落在 25 kHz 刻度上的整数。
+        channels: ``(频道编号, 频率kHz)`` 或
+            ``(频道编号, 频率kHz, 名称|None)`` 的有序可迭代对象，频率已由上层
+            校验为落在 25 kHz 刻度上的整数；名称为可选业务名称
+            （演员/腰包/机位），缺省为 ``None``。
 
     返回:
         冲突字典列表，按 (受影响频道频率, 受影响频道编号, 来源小编号,
         来源大编号) 升序排列；相同 (产物, 来源对, 受影响频道) 只保留一次。
+        victim 与 sources 各项在原字段外附带该频道的规范化 ``name``
+        （未填写时为 ``None``）；计算式文本与冲突身份不含名称，保持不变。
     """
-    chans = list(channels)
+    chans = [(c[0], c[1], c[2] if len(c) > 2 else None) for c in channels]
     conflicts: list[dict[str, Any]] = []
     seen: set[tuple[int, Any, Any, Any]] = set()
 
     n = len(chans)
     for i in range(n):
-        id_a, fa = chans[i]
+        id_a, fa, name_a = chans[i]
         for j in range(i + 1, n):
-            id_b, fb = chans[j]
+            id_b, fb, name_b = chans[j]
             # 仅对“不同发射频率”的一对频道计算互调；
             # 同频退化 2f−f=f 不属于三阶互调（同频干扰不在本工具范围）。
             if fa == fb:
@@ -49,41 +73,29 @@ def find_conflicts(channels: Iterable[tuple[Any, int]]) -> list[dict[str, Any]]:
                 for k in range(n):
                     if k == i or k == j:
                         continue
-                    victim_id, fv = chans[k]
+                    victim_id, fv, victim_name = chans[k]
                     distance = abs(product - fv)
                     if distance > HIT_TOLERANCE_KHZ:
                         continue
 
                     low_id, high_id = sorted((id_a, id_b))
-                    # 去重键：产物 + 来源对 + 受影响频道
+                    # 去重键：产物 + 来源对 + 受影响频道（名称不参与身份）
                     dedup_key = (product, low_id, high_id, victim_id)
                     if dedup_key in seen:
                         continue
                     seen.add(dedup_key)
 
                     sources = [
-                        {
-                            "id": id_a,
-                            "frequency_khz": fa,
-                            "frequency_mhz": fa / 1000,
-                            "coefficient": 2 if id_a == doubled_id else 1,
-                        },
-                        {
-                            "id": id_b,
-                            "frequency_khz": fb,
-                            "frequency_mhz": fb / 1000,
-                            "coefficient": 2 if id_b == doubled_id else 1,
-                        },
+                        {**_channel_ref(id_a, fa, name_a),
+                         "coefficient": 2 if id_a == doubled_id else 1},
+                        {**_channel_ref(id_b, fb, name_b),
+                         "coefficient": 2 if id_b == doubled_id else 1},
                     ]
                     sources.sort(key=lambda s: s["id"])
 
                     conflicts.append(
                         {
-                            "victim": {
-                                "id": victim_id,
-                                "frequency_khz": fv,
-                                "frequency_mhz": fv / 1000,
-                            },
+                            "victim": _channel_ref(victim_id, fv, victim_name),
                             "sources": sources,
                             "doubled_source_id": doubled_id,
                             "product_khz": product,
@@ -110,7 +122,7 @@ def find_conflicts(channels: Iterable[tuple[Any, int]]) -> list[dict[str, Any]]:
 
 
 def summarize_channel_roles(
-    channels: Iterable[tuple[Any, int]],
+    channels: Iterable[tuple[Any, int] | tuple[Any, int, str | None]],
     conflicts: Iterable[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """按频道聚合冲突身份：作为来源的次数、作为受影响频道的次数与角色。
@@ -121,7 +133,7 @@ def summarize_channel_roles(
     ``channels`` 顺序一致，每项为
     ``{"id", "source_count", "victim_count", "role"}``。
     """
-    chans = list(channels)
+    chans = [(c[0], c[1]) for c in channels]
     # 频道编号经校验唯一；[来源次数, 受影响次数]
     counts: dict[Any, list[int]] = {channel_id: [0, 0] for channel_id, _ in chans}
     for conflict in conflicts:

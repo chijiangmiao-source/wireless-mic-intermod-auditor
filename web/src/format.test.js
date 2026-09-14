@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildDownloadPayload,
+  channelDisplayName,
   channelRoleLabel,
   conflictInvolvesChannel,
   formatMHz,
@@ -90,6 +91,20 @@ describe('channelRoleLabel', () => {
   it('未知或缺失角色回退为破折号（兼容未返回摘要的旧客户端数据）', () => {
     expect(channelRoleLabel(undefined)).toBe('—');
     expect(channelRoleLabel('unexpected')).toBe('—');
+  });
+});
+
+describe('channelDisplayName', () => {
+  it('返回去空白后的非空名称', () => {
+    expect(channelDisplayName({ id: 1, name: ' 主唱麦 ' })).toBe('主唱麦');
+  });
+
+  it('缺省、非字符串或纯空白名称返回 null，调用方据此只显示编号', () => {
+    expect(channelDisplayName({ id: 1 })).toBeNull();
+    expect(channelDisplayName({ id: 1, name: undefined })).toBeNull();
+    expect(channelDisplayName({ id: 1, name: '   ' })).toBeNull();
+    expect(channelDisplayName({ id: 1, name: 5 })).toBeNull();
+    expect(channelDisplayName(null)).toBeNull();
   });
 });
 

@@ -13,6 +13,8 @@ from .im3 import GRID_KHZ, MAX_FREQUENCY_KHZ, MIN_FREQUENCY_KHZ
 
 MIN_CHANNELS = 2
 MAX_CHANNELS = 64
+# 可选业务名称（演员/腰包/接收机机位）规范化后的字符上限
+MAX_NAME_LENGTH = 40
 # 频率解析容差（kHz），只用于吸收十进制浮点表示误差
 _FREQUENCY_EPSILON_KHZ = 1e-6
 # 编号必须能被浏览器/JSON 数字精确表示：超过该范围的整数在 JavaScript 中
@@ -42,6 +44,22 @@ def is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+def check_name(value: Any) -> tuple[str | None, str | None]:
+    """规范化可选业务名称（演员、腰包或接收机机位）。
+
+    仅当 ``name`` 键存在时调用：去除首尾空白后须为 1–40 个字符，
+    允许与同批其他频道重复。返回 ``(规范化名称, None)`` 或
+    ``(None, 错误消息)``；定位信息由调用方补充。
+    """
+    if not isinstance(value, str):
+        return None, "频道名称 name 必须是字符串，去除首尾空白后长度为 1 至 40 个字符"
+    normalized = value.strip()
+    if not (1 <= len(normalized) <= MAX_NAME_LENGTH):
+        return None, (f"频道名称 {value!r} 去除首尾空白后必须为 1 至 "
+                      f"{MAX_NAME_LENGTH} 个字符")
+    return normalized, None
+
+
 def check_frequency(value: Any) -> tuple[int | None, str | None]:
     """校验以 MHz 表示的数值频率。
 
@@ -67,11 +85,15 @@ def check_frequency(value: Any) -> tuple[int | None, str | None]:
     return khz, None
 
 
-def validate_channels(payload: Any) -> tuple[list[tuple[int, int]], list[dict]]:
+def validate_channels(
+    payload: Any, *, allow_name: bool = False
+) -> tuple[list[tuple[int, int, str | None]], list[dict]]:
     """校验已解析的 JSON 负载。
 
-    返回 ``(channels, errors)``；channels 元素为 ``(编号, 整数kHz频率)``。
-    errors 非空时 channels 为空列表。
+    返回 ``(channels, errors)``；channels 元素为
+    ``(编号, 整数kHz频率, 名称|None)``，名称仅在 ``allow_name`` 为真且该项
+    携带合法 ``name`` 时为去空白后的字符串。errors 非空时 channels 为空列表。
+    ``allow_name`` 为假时（候选评估请求）出现 ``name`` 仍按非法字段拒绝。
     """
     errors: list[dict] = []
 
@@ -97,7 +119,8 @@ def validate_channels(payload: Any) -> tuple[list[tuple[int, int]], list[dict]]:
         )
         return [], errors
 
-    channels: list[tuple[int, int]] = []
+    allowed_fields = {"id", "frequency"} | ({"name"} if allow_name else set())
+    channels: list[tuple[int, int, str | None]] = []
     seen_ids: set[int] = set()
 
     for index, item in enumerate(payload):
@@ -108,12 +131,13 @@ def validate_channels(payload: Any) -> tuple[list[tuple[int, int]], list[dict]]:
             )
             continue
 
-        extra = set(item.keys()) - {"id", "frequency"}
+        extra = set(item.keys()) - allowed_fields
         missing = [f for f in ("id", "frequency") if f not in item]
         if extra:
             errors.append(
                 {"index": index, "field": None,
-                 "message": f"存在非法字段 {sorted(extra)}，每项只允许 id 与 frequency"}
+                 "message": f"存在非法字段 {sorted(extra)}，每项只允许 id 与 frequency"
+                            + ("（可另带可选 name）" if allow_name else "")}
             )
         for field in missing:
             errors.append(
@@ -152,8 +176,18 @@ def validate_channels(payload: Any) -> tuple[list[tuple[int, int]], list[dict]]:
                 {"index": index, "field": "frequency", "message": frequency_error}
             )
 
+        # 可选业务名称：缺省为 None；存在即规范化并校验，错误按 name 字段定位，
+        # 同批名称允许重复。名称错误不影响 id/frequency 的逐项检查。
+        name: str | None = None
+        if allow_name and "name" in item:
+            name, name_error = check_name(item["name"])
+            if name_error is not None:
+                errors.append(
+                    {"index": index, "field": "name", "message": name_error}
+                )
+
         if id_ok and khz is not None:
-            channels.append((channel_id, khz))
+            channels.append((channel_id, khz, name))
 
     if errors:
         return [], errors

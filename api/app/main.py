@@ -68,7 +68,7 @@ async def analyze(request: Request) -> JSONResponse:
     if error_response is not None:
         return error_response
 
-    channels, errors = validate_channels(payload)
+    channels, errors = validate_channels(payload, allow_name=True)
     if errors:
         return JSONResponse(
             status_code=422,
@@ -79,19 +79,27 @@ async def analyze(request: Request) -> JSONResponse:
     # 每个既有频道附加按规范冲突身份聚合的角色摘要（纯增量字段，
     # 未读取摘要的客户端仍可只消费原有字段）
     role_summary = summarize_channel_roles(channels, conflicts)
+    channel_entries = []
+    for (channel_id, khz, name), summary in zip(channels, role_summary):
+        entry = {
+            "id": channel_id,
+            "frequency_khz": khz,
+            "frequency_mhz": khz / 1000,
+            "source_count": summary["source_count"],
+            "victim_count": summary["victim_count"],
+            "role": summary["role"],
+        }
+        # 规范化业务名称为纯增量字段：未填写时不输出 name 键，
+        # 旧格式批次的响应与既有契约逐字段一致
+        if name is not None:
+            entry["name"] = name
+        channel_entries.append(entry)
     return JSONResponse(
         status_code=200,
         content={
             "status": "conflict" if conflicts else "clear",
             "channel_count": len(channels),
-            "channels": [
-                {"id": channel_id, "frequency_khz": khz,
-                 "frequency_mhz": khz / 1000,
-                 "source_count": summary["source_count"],
-                 "victim_count": summary["victim_count"],
-                 "role": summary["role"]}
-                for (channel_id, khz), summary in zip(channels, role_summary)
-            ],
+            "channels": channel_entries,
             "conflict_count": len(conflicts),
             "conflicts": conflicts,
         },
@@ -143,7 +151,7 @@ async def candidate_impact(request: Request) -> JSONResponse:
     channels, errors = validate_channels(payload["channels"])
     # 基线校验失败时 channels 为空，仍需基于原始负载中的现有编号做候选重复判定，
     # 使基线频率错误与候选编号重复在同一次 422 中同时定位
-    existing_ids = {channel_id for channel_id, _ in channels}
+    existing_ids = {channel_id for channel_id, _khz, _name in channels}
     if errors:
         existing_ids = extract_channel_ids(payload["channels"])
     candidate, candidate_errors = validate_candidate(

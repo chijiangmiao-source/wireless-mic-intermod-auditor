@@ -96,4 +96,79 @@ test.describe('三阶互调频率协调页面', () => {
     await expect(page.getByTestId('form-error')).toBeVisible();
     await expect(page.getByTestId('error-item').first()).toContainText('JSON 无法解析');
   });
+
+  test('带业务名称的文件：频道表、计算式旁与下载 JSON 同步展示名称', async ({ page }) => {
+    await page.getByTestId('file-input').setInputFiles(fixtures('named-conflict.json'));
+    await expect(page.getByTestId('result-conflict')).toBeVisible();
+    await expect(page.getByTestId('conflict-count')).toHaveText('2');
+
+    // 频道表：名称列展示规范化后的名称，未命名频道显示破折号
+    await page.getByText(/查看输入的 3 个频道/).click();
+    const rows = page.getByTestId('channel-row');
+    await expect(rows.nth(0).getByTestId('channel-name-cell')).toHaveText('主唱麦');
+    await expect(rows.nth(1).getByTestId('channel-name-cell')).toHaveText('吉他腰包');
+    await expect(rows.nth(2).getByTestId('channel-name-cell')).toHaveText('—');
+
+    // 命中 #33（未命名）的卡片：计算式旁的名称行按业务名称辨认来源与受影响对象
+    const card = page.getByTestId('conflict-item').filter({ hasText: '受影响频道 #33' });
+    const namesLine = card.getByTestId('conflict-channel-names');
+    await expect(namesLine).toContainText('#11 主唱麦');
+    await expect(namesLine).toContainText('#22 吉他腰包');
+    await expect(namesLine).toContainText('受影响：#33');
+    // 计算式本身仍只含编号与频率
+    await expect(card.getByTestId('conflict-formula')).not.toContainText('主唱麦');
+    // 三频道表的业务名称列
+    await expect(card.locator('.row-victim')).toContainText('—');
+    await expect(card.locator('.row-source').first()).toContainText('主唱麦');
+    await expect(card.locator('.row-source').nth(1)).toContainText('吉他腰包');
+
+    // 下载 JSON 同步包含名称（输入项与冲突明细）
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByTestId('download-button').click(),
+    ]);
+    const stream = await download.createReadStream();
+    const chunks = [];
+    for await (const chunk of stream) chunks.push(chunk);
+    const report = JSON.parse(Buffer.concat(chunks).toString('utf-8'));
+    expect(report.input_channels[0].name).toBe(' 主唱麦 ');
+    const hit33 = report.conflicts.find((c) => c.victim.id === 33);
+    expect(hit33.victim.name).toBeUndefined();
+    expect(hit33.sources.find((s) => s.id === 11).name).toBe('主唱麦');
+  });
+
+  test('含空名称的新文件：按 name 字段定位错误且不残留旧分析、收窄与候选结论', async ({ page }) => {
+    // 先上传带名称的合法文件得到冲突结论
+    await page.getByTestId('file-input').setInputFiles(fixtures('named-conflict.json'));
+    await expect(page.getByTestId('result-conflict')).toBeVisible();
+
+    // 制造收窄视图
+    await page.getByText(/查看输入的 3 个频道/).click();
+    await page.getByTestId('channel-row').nth(0).click();
+    await expect(page.getByTestId('channel-filter-banner')).toBeVisible();
+
+    // 制造一次候选结论（600 MHz 对 480/500/520 基线确实安全）
+    await page.getByTestId('candidate-id-input').fill('4');
+    await page.getByTestId('candidate-frequency-input').fill('600.000');
+    await page.getByTestId('candidate-evaluate-button').click();
+    await expect(page.getByTestId('candidate-safe')).toBeVisible();
+
+    // 上传含空名称的新文件
+    await page.getByTestId('file-input').setInputFiles(fixtures('invalid-name.json'));
+
+    await expect(page.getByTestId('form-error')).toBeVisible();
+    const items = page.getByTestId('error-item');
+    await expect(items).toHaveCount(1);
+    await expect(items.first()).toContainText('第 2 项');
+    await expect(items.first()).toContainText('name');
+    await expect(items.first()).toContainText('1 至 40');
+
+    // 旧分析、频道表、收窄与候选结论无残留
+    await expect(page.getByTestId('result-conflict')).toHaveCount(0);
+    await expect(page.getByTestId('result-clear')).toHaveCount(0);
+    await expect(page.getByTestId('conflict-item')).toHaveCount(0);
+    await expect(page.getByTestId('channel-row')).toHaveCount(0);
+    await expect(page.getByTestId('channel-filter-banner')).toHaveCount(0);
+    await expect(page.getByTestId('candidate-panel')).toHaveCount(0);
+  });
 });
