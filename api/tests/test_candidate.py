@@ -280,6 +280,24 @@ def test_safe_integer_boundary_ids_accepted():
         assert resp.json()["candidate"]["id"] == candidate_id
 
 
+def test_fractional_boundary_id_rejected_over_raw_json_wire():
+    # 经真实 JSON 文本传输时 9007199254740991.1 解析为浮点（非整数），
+    # 必须按“必须是整数”拒绝，不能被舍入成安全整数边界 2^53−1 后继续评估
+    raw = (
+        b'{"channels":[{"id":1,"frequency":470.000},{"id":2,"frequency":600.000}],'
+        b'"candidate":{"id":9007199254740991.1,"frequency":500.000}}'
+    )
+    resp = client.post(
+        "/api/candidate",
+        content=raw,
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 422
+    errors = resp.json()["errors"]
+    assert [e["field"] for e in errors] == ["candidate.id"]
+    assert "整数" in errors[0]["message"]
+
+
 def test_candidate_endpoint_rejects_empty_and_malformed_body():
     resp = client.post("/api/candidate", content=b"")
     assert resp.status_code == 422

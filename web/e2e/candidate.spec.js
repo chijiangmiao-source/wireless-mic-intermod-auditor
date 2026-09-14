@@ -177,4 +177,27 @@ test.describe('候选频点评估', () => {
     await expect(page.getByTestId('candidate-conflict')).toHaveCount(0);
     await expect(page.getByTestId('result-clear')).toBeVisible();
   });
+
+  test('安全整数边界编号带小数时提示编号错误，不静默舍入', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('file-input').setInputFiles(fixtures('clear.json'));
+    await expect(page.getByTestId('result-clear')).toBeVisible();
+
+    // Number('9007199254740991.1') === 9007199254740991（恰好舍成 2^53−1），
+    // 页面必须提示编号错误，而不是改成相邻整数继续评估
+    await page.getByTestId('candidate-id-input').fill('9007199254740991.1');
+    await page.getByTestId('candidate-frequency-input').fill('500.000');
+    await page.getByTestId('candidate-evaluate-button').click();
+
+    const candidateError = page.getByTestId('candidate-error');
+    await expect(candidateError).toBeVisible();
+    const items = candidateError.getByTestId('error-item');
+    await expect(items).toHaveCount(1);
+    await expect(items).toContainText('candidate.id');
+    await expect(items).toContainText('必须是整数');
+    await expect(items).toContainText('9007199254740991.1');
+    await expect(page.getByTestId('candidate-safe')).toHaveCount(0);
+    await expect(page.getByTestId('candidate-conflict')).toHaveCount(0);
+    await expect(page.getByTestId('result-clear')).toBeVisible();
+  });
 });

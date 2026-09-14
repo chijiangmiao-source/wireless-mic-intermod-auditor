@@ -496,4 +496,42 @@ describe('候选频点评估', () => {
     const candidateCall = fetch.mock.calls.find(([url]) => url === '/api/candidate');
     expect(JSON.parse(candidateCall[1].body).candidate.id).toBe(9007199254740991);
   });
+
+  it('边界编号带小数（2^53−1 + .1）拒绝并提示编号必须是整数，不静默舍入', async () => {
+    const user = userEvent.setup();
+    await runBaseline(user);
+
+    // Number('9007199254740991.1') === 9007199254740991（恰好舍成安全整数边界），
+    // 绝不能被改成相邻整数后继续评估
+    await fillAndEvaluate(user, '9007199254740991.1', '500.000');
+
+    const errorPanel = await screen.findByTestId('candidate-error');
+    const items = within(errorPanel).getAllByTestId('error-item');
+    expect(items).toHaveLength(1);
+    expect(items[0]).toHaveTextContent('candidate.id');
+    expect(items[0]).toHaveTextContent('必须是整数');
+    expect(items[0]).toHaveTextContent('9007199254740991.1');
+
+    // 不发送候选请求；不产生任何结论，基线保持不变
+    const candidateCalls = fetch.mock.calls.filter(([url]) => url === '/api/candidate');
+    expect(candidateCalls).toHaveLength(0);
+    expect(screen.queryByTestId('candidate-safe')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('candidate-conflict')).not.toBeInTheDocument();
+    expect(screen.getByTestId('result-conflict')).toBeInTheDocument();
+  });
+
+  it('普通整数写法的小数编号（如 4.0）同样按非整数拒绝', async () => {
+    const user = userEvent.setup();
+    await runBaseline(user);
+
+    await fillAndEvaluate(user, '4.0', '500.000');
+
+    const errorPanel = await screen.findByTestId('candidate-error');
+    const items = within(errorPanel).getAllByTestId('error-item');
+    expect(items).toHaveLength(1);
+    expect(items[0]).toHaveTextContent('candidate.id');
+    expect(items[0]).toHaveTextContent('必须是整数');
+    const candidateCalls = fetch.mock.calls.filter(([url]) => url === '/api/candidate');
+    expect(candidateCalls).toHaveLength(0);
+  });
 });

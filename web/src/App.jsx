@@ -16,6 +16,8 @@ const SAMPLE_JSON = `[
 // 编号必须能被 JSON 数字精确表示：±(2^53−1)，与后端校验保持一致
 const MAX_SAFE_ID = Number.MAX_SAFE_INTEGER;
 const INTEGER_RE = /^[+-]?\d+$/;
+// 含小数点的数值文本（如 9007199254740991.1）
+const DECIMAL_RE = /^[+-]?(?:\d+\.(\d*)|\.(\d+))$/;
 
 // 候选频率框的文本转 JSON 数值；空文本与非数值交给后端按字段错误定位
 function parseCandidateField(text) {
@@ -39,7 +41,13 @@ function parseCandidateId(text) {
     }
     return { value: Number(trimmed) };
   }
-  // 非整数文本（小数、科学计数法、字母等）原则上交给后端按“必须是整数”定位；
+  // 小数文本（如 9007199254740991.1）会被 Number() 舍掉小数部分变成整数，
+  // 在安全整数边界被静默改成相邻整数后继续评估；编号必须是整数，
+  // 必须在 Number() 之前按字段拒绝，不能携带被改写的编号发请求
+  if (DECIMAL_RE.test(trimmed)) {
+    return { error: `候选编号 ${trimmed} 必须是整数，不能含小数部分` };
+  }
+  // 其余非整数文本（科学计数法、字母等）原则上交给后端按“必须是整数”定位；
   // 但若 Number() 已把它解析成超范围整数（如 1e16），同样必须拒绝，不能静默舍入
   const value = Number(trimmed);
   if (Number.isFinite(value) && Number.isInteger(value) && Math.abs(value) > MAX_SAFE_ID) {
