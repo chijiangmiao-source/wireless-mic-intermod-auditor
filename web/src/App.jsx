@@ -13,12 +13,46 @@ const SAMPLE_JSON = `[
   { "id": 33, "frequency": 520.000 }
 ]`;
 
-// 候选输入框的文本转 JSON 数值；空文本与非数值交给后端按字段错误定位
+// 编号必须能被 JSON 数字精确表示：±(2^53−1)，与后端校验保持一致
+const MAX_SAFE_ID = Number.MAX_SAFE_INTEGER;
+const INTEGER_RE = /^[+-]?\d+$/;
+
+// 候选频率框的文本转 JSON 数值；空文本与非数值交给后端按字段错误定位
 function parseCandidateField(text) {
   const trimmed = text.trim();
   if (trimmed === '') return null;
   const value = Number(trimmed);
   return Number.isFinite(value) ? value : null;
+}
+
+// 候选编号框解析：返回 { value } 或 { error }。
+// 超出安全整数范围的编号不能交给 Number()——它会被静默舍入成相邻整数，
+// 必须在发请求前拒绝并指出 candidate.id 字段错误。
+function parseCandidateId(text) {
+  const trimmed = text.trim();
+  if (trimmed === '') return { value: null };
+  if (INTEGER_RE.test(trimmed)) {
+    // 逐位比较，避免 Number() 对 2^53 以上整数的静默舍入
+    const digits = trimmed.replace(/^[+-]/, '');
+    if (BigInt(digits) > BigInt(MAX_SAFE_ID)) {
+      return { error: unsafeIdMessage(trimmed) };
+    }
+    return { value: Number(trimmed) };
+  }
+  // 非整数文本（小数、科学计数法、字母等）原则上交给后端按“必须是整数”定位；
+  // 但若 Number() 已把它解析成超范围整数（如 1e16），同样必须拒绝，不能静默舍入
+  const value = Number(trimmed);
+  if (Number.isFinite(value) && Number.isInteger(value) && Math.abs(value) > MAX_SAFE_ID) {
+    return { error: unsafeIdMessage(trimmed) };
+  }
+  return { value: Number.isFinite(value) ? value : null };
+}
+
+function unsafeIdMessage(text) {
+  return (
+    `候选编号 ${text} 超出安全整数范围，绝对值不能超过 ${MAX_SAFE_ID}` +
+    '（2^53−1），否则浏览器与 JSON 无法精确表示该编号'
+  );
 }
 
 export default function App() {
@@ -99,6 +133,22 @@ export default function App() {
     await submit(SAMPLE_JSON);
   };
 
+  // 修改候选编号或频率后，上一次评估的安全/冲突结论立即失效：
+  // 输入一旦变化就清除旧结论与旧错误，避免页面残留过期结论
+  const onCandidateIdChange = (text) => {
+    setCandidateIdText(text);
+    setCandidateResult(null);
+    setCandidateErrors([]);
+    setCandidateFormError('');
+  };
+
+  const onCandidateFreqChange = (text) => {
+    setCandidateFreqText(text);
+    setCandidateResult(null);
+    setCandidateErrors([]);
+    setCandidateFormError('');
+  };
+
   // 候选评估只影响候选区：先清除本次候选结论，保留基线分析
   const onEvaluateCandidate = async () => {
     setCandidateResult(null);
@@ -111,10 +161,20 @@ export default function App() {
       return;
     }
 
+    // 超出安全整数范围的编号在发请求前拒绝：Number() 会静默舍入成相邻整数
+    const parsedId = parseCandidateId(candidateIdText);
+    if (parsedId.error) {
+      setCandidateFormError('候选评估请求校验未通过');
+      setCandidateErrors([
+        { index: null, field: 'candidate.id', message: parsedId.error },
+      ]);
+      return;
+    }
+
     setCandidatePending(true);
     try {
       const outcome = await evaluateCandidate(input, {
-        id: parseCandidateField(candidateIdText),
+        id: parsedId.value,
         frequency: parseCandidateField(candidateFreqText),
       });
       if (outcome.ok) {
@@ -199,8 +259,8 @@ export default function App() {
         <CandidateSection
           idText={candidateIdText}
           freqText={candidateFreqText}
-          onIdChange={setCandidateIdText}
-          onFreqChange={setCandidateFreqText}
+          onIdChange={onCandidateIdChange}
+          onFreqChange={onCandidateFreqChange}
           onEvaluate={onEvaluateCandidate}
           pending={candidatePending}
           busy={busy}

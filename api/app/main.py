@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .im3 import conflict_identity, find_conflicts
-from .validation import validate_candidate, validate_channels
+from .validation import extract_channel_ids, validate_candidate, validate_channels
 
 app = FastAPI(
     title="无线话筒三阶互调频率协调 API",
@@ -135,8 +135,13 @@ async def candidate_impact(request: Request) -> JSONResponse:
         )
 
     channels, errors = validate_channels(payload["channels"])
+    # 基线校验失败时 channels 为空，仍需基于原始负载中的现有编号做候选重复判定，
+    # 使基线频率错误与候选编号重复在同一次 422 中同时定位
+    existing_ids = {channel_id for channel_id, _ in channels}
+    if errors:
+        existing_ids = extract_channel_ids(payload["channels"])
     candidate, candidate_errors = validate_candidate(
-        payload["candidate"], {channel_id for channel_id, _ in channels}
+        payload["candidate"], existing_ids
     )
     errors.extend(candidate_errors)
     if errors:

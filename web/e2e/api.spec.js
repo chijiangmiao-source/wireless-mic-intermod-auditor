@@ -147,3 +147,38 @@ test('候选评估：非法候选按字段定位返回 422', async ({ request })
   expect(fields).toContain('candidate.id');
   expect(fields).toContain('candidate.frequency');
 });
+
+test('候选评估：基线频率非法且候选编号重复时两类错误同时返回', async ({ request }) => {
+  const resp = await request.post(`${baseURL}/api/candidate`, {
+    data: {
+      channels: [
+        { id: 1, frequency: 470.013 },
+        { id: 2, frequency: 600.0 },
+      ],
+      candidate: { id: 2, frequency: 500.0 },
+    },
+  });
+  expect(resp.status()).toBe(422);
+  const body = await resp.json();
+  const fields = body.errors.map((e) => e.field);
+  // 不能只返回基线频率错误，候选编号重复也要同时定位
+  expect(fields).toContain('frequency');
+  expect(fields).toContain('candidate.id');
+  expect(body.errors.some((e) => /重复/.test(e.message))).toBe(true);
+});
+
+test('候选评估：超出安全整数范围的编号原样拒绝，不静默舍入', async ({ request }) => {
+  // 直接发送 JSON 文本：9007199254740993 = 2^53+1，Number() 会将其舍入
+  const resp = await request.post(`${baseURL}/api/candidate`, {
+    headers: { 'Content-Type': 'application/json' },
+    data:
+      '{"channels":[{"id":1,"frequency":470.000},{"id":2,"frequency":600.000}],' +
+      '"candidate":{"id":9007199254740993,"frequency":500.000}}',
+  });
+  expect(resp.status()).toBe(422);
+  const body = await resp.json();
+  expect(body.errors).toHaveLength(1);
+  expect(body.errors[0].field).toBe('candidate.id');
+  expect(body.errors[0].message).toContain('9007199254740993');
+  expect(body.errors[0].message).toContain('安全整数');
+});

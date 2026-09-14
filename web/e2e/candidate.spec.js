@@ -124,4 +124,57 @@ test.describe('候选频点评估', () => {
     await expect(candidateError).toContainText('超出允许范围');
     await expect(page.getByTestId('result-clear')).toBeVisible();
   });
+
+  test('评估成功后修改候选编号或频率，旧结论立即取消', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('file-input').setInputFiles(fixtures('clear.json'));
+    await expect(page.getByTestId('result-clear')).toBeVisible();
+
+    await page.getByTestId('candidate-id-input').fill('4');
+    await page.getByTestId('candidate-frequency-input').fill('500.000');
+    await page.getByTestId('candidate-evaluate-button').click();
+    await expect(page.getByTestId('candidate-safe')).toBeVisible();
+
+    // 修改候选编号：不再次点击评估，上一次“可安全加入”结论也必须立即消失
+    await page.getByTestId('candidate-id-input').fill('5');
+    await expect(page.getByTestId('candidate-safe')).toHaveCount(0);
+    await expect(page.getByTestId('candidate-conflict')).toHaveCount(0);
+    await expect(page.getByTestId('candidate-error')).toHaveCount(0);
+    // 输入的新编号保留，基线结论不受影响
+    await expect(page.getByTestId('candidate-id-input')).toHaveValue('5');
+    await expect(page.getByTestId('result-clear')).toBeVisible();
+
+    // 修改候选频率同样立即取消旧结论（先重新评估一次冲突结论）
+    await page.getByTestId('candidate-id-input').fill('4');
+    await page.getByTestId('candidate-frequency-input').fill('535.000');
+    await page.getByTestId('candidate-evaluate-button').click();
+    await expect(page.getByTestId('candidate-conflict')).toBeVisible();
+    await page.getByTestId('candidate-frequency-input').fill('534.000');
+    await expect(page.getByTestId('candidate-conflict')).toHaveCount(0);
+    await expect(page.getByTestId('candidate-safe')).toHaveCount(0);
+  });
+
+  test('候选编号超出浏览器安全整数范围时拒绝并定位 candidate.id', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('file-input').setInputFiles(fixtures('clear.json'));
+    await expect(page.getByTestId('result-clear')).toBeVisible();
+
+    // 2^53+1：Number() 会静默舍入成相邻整数 2^53，页面必须在发请求前拒绝
+    await page.getByTestId('candidate-id-input').fill('9007199254740993');
+    await page.getByTestId('candidate-frequency-input').fill('500.000');
+    await page.getByTestId('candidate-evaluate-button').click();
+
+    const candidateError = page.getByTestId('candidate-error');
+    await expect(candidateError).toBeVisible();
+    const items = candidateError.getByTestId('error-item');
+    await expect(items).toHaveCount(1);
+    await expect(items).toContainText('candidate.id');
+    await expect(items).toContainText('安全整数');
+    await expect(items).toContainText('9007199254740993');
+
+    // 不产生安全/冲突结论，基线分析保持不变
+    await expect(page.getByTestId('candidate-safe')).toHaveCount(0);
+    await expect(page.getByTestId('candidate-conflict')).toHaveCount(0);
+    await expect(page.getByTestId('result-clear')).toBeVisible();
+  });
 });

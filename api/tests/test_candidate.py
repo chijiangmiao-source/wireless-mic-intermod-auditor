@@ -150,6 +150,10 @@ def test_candidate_evaluation_is_deterministic():
         ({"id": 4, "frequency": 694.025}, "candidate.frequency", "超出允许范围"),
         # 编号不是整数
         ({"id": "4", "frequency": 500.0}, "candidate.id", "整数"),
+        # 编号超出浏览器安全整数范围：不得静默舍入成相邻整数再评估
+        ({"id": 2**53, "frequency": 500.0}, "candidate.id", "安全整数"),
+        ({"id": 2**53 + 1, "frequency": 500.0}, "candidate.id", "安全整数"),
+        ({"id": -(2**53), "frequency": 500.0}, "candidate.id", "安全整数"),
         # 频率不是数值
         ({"id": 4, "frequency": "500.0"}, "candidate.frequency", "数值"),
     ],
@@ -223,6 +227,57 @@ def test_candidate_endpoint_reuses_batch_validation_for_channels():
     errors = resp.json()["errors"]
     assert any(e["index"] == 0 and e["field"] == "frequency" for e in errors)
     assert any(e["index"] == 1 and e["field"] == "id" for e in errors)
+
+
+def test_invalid_baseline_and_duplicate_candidate_id_reported_together():
+    # 基线含非法频率（validate_channels 因此返回空 channels）时，
+    # 候选编号与现有频道重复仍必须被同时定位，不能只返回基线频率错误
+    bad_channels = [
+        {"id": 1, "frequency": 470.013},
+        {"id": 2, "frequency": 600.0},
+    ]
+    resp = post_candidate(bad_channels, {"id": 2, "frequency": 500.0})
+    assert resp.status_code == 422
+    errors = resp.json()["errors"]
+    assert any(
+        e["index"] == 0 and e["field"] == "frequency" for e in errors
+    ), errors
+    duplicate = [e for e in errors if e["field"] == "candidate.id"]
+    assert duplicate, errors
+    assert any("重复" in e["message"] for e in duplicate)
+    # 合法的候选频率不应被报错
+    assert not [e for e in errors if e["field"] == "candidate.frequency"]
+
+
+def test_unsafe_integer_id_rejected_over_raw_json_wire():
+    # 经真实 JSON 文本传输：9007199254740993 = 2^53+1 必须原样被拒绝，
+    # 绝不能在服务端被舍入成相邻整数后参与评估
+    raw = (
+        b'{"channels":[{"id":1,"frequency":470.000},{"id":2,"frequency":600.000}],'
+        b'"candidate":{"id":9007199254740993,"frequency":500.000}}'
+    )
+    resp = client.post(
+        "/api/candidate",
+        content=raw,
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 422
+    errors = resp.json()["errors"]
+    assert [e["field"] for e in errors] == ["candidate.id"]
+    assert "9007199254740993" in errors[0]["message"]
+    assert "安全整数" in errors[0]["message"]
+
+
+def test_safe_integer_boundary_ids_accepted():
+    # ±(2^53−1) 是可精确表示的边界，应正常通过编号校验
+    for candidate_id in (2**53 - 1, -(2**53 - 1)):
+        channels = [
+            {"id": 1, "frequency": 470.0},
+            {"id": 2, "frequency": 600.0},
+        ]
+        resp = post_candidate(channels, {"id": candidate_id, "frequency": 500.0})
+        assert resp.status_code == 200, (candidate_id, resp.json())
+        assert resp.json()["candidate"]["id"] == candidate_id
 
 
 def test_candidate_endpoint_rejects_empty_and_malformed_body():

@@ -406,4 +406,94 @@ describe('候选频点评估', () => {
     expect(screen.getByTestId('candidate-id-input')).toHaveValue('');
     expect(screen.getByTestId('candidate-frequency-input')).toHaveValue('');
   });
+
+  it('评估成功后修改候选编号会立即取消旧结论', async () => {
+    const user = userEvent.setup();
+    await runBaseline(user);
+    await fillAndEvaluate(user, '4', '500.000');
+    await waitFor(() =>
+      expect(screen.getByTestId('candidate-safe')).toBeInTheDocument(),
+    );
+
+    // 在编号框追加一个字符，不等下一次评估：旧结论必须立即消失
+    await user.type(screen.getByTestId('candidate-id-input'), '5');
+    expect(screen.queryByTestId('candidate-safe')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('candidate-conflict')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('candidate-error')).not.toBeInTheDocument();
+    // 输入内容仍保留，且基线结论不受影响
+    expect(screen.getByTestId('candidate-id-input')).toHaveValue('45');
+    expect(screen.getByTestId('result-conflict')).toBeInTheDocument();
+  });
+
+  it('评估成功后修改候选频率会立即取消旧结论', async () => {
+    const user = userEvent.setup();
+    stubFetchRouting(
+      jsonResponse(200, conflictBody),
+      jsonResponse(200, candidateConflictBody),
+    );
+    render(<App />);
+    await user.click(screen.getByTestId('sample-button'));
+    await waitFor(() =>
+      expect(screen.getByTestId('result-conflict')).toBeInTheDocument(),
+    );
+    await fillAndEvaluate(user, '44', '520.025');
+    await waitFor(() =>
+      expect(screen.getByTestId('candidate-conflict')).toBeInTheDocument(),
+    );
+
+    await user.type(screen.getByTestId('candidate-frequency-input'), '0');
+    expect(screen.queryByTestId('candidate-conflict')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('candidate-safe')).not.toBeInTheDocument();
+    expect(screen.getByTestId('candidate-frequency-input')).toHaveValue('520.0250');
+  });
+
+  it('候选编号超出安全整数范围时拒绝评估并定位 candidate.id，不发送请求', async () => {
+    const user = userEvent.setup();
+    await runBaseline(user);
+
+    // 2^53+1：Number() 会静默舍入成 2^53，必须在发请求前拒绝
+    await fillAndEvaluate(user, '9007199254740993', '500.000');
+
+    const errorPanel = await screen.findByTestId('candidate-error');
+    const items = within(errorPanel).getAllByTestId('error-item');
+    expect(items).toHaveLength(1);
+    expect(items[0]).toHaveTextContent('candidate.id');
+    expect(items[0]).toHaveTextContent('安全整数');
+    expect(items[0]).toHaveTextContent('9007199254740993');
+
+    // 没有发起任何候选请求，旧结论也未出现；基线分析保持不变
+    const candidateCalls = fetch.mock.calls.filter(([url]) => url === '/api/candidate');
+    expect(candidateCalls).toHaveLength(0);
+    expect(screen.queryByTestId('candidate-safe')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('candidate-conflict')).not.toBeInTheDocument();
+    expect(screen.getByTestId('result-conflict')).toBeInTheDocument();
+  });
+
+  it('科学计数法表示的超范围整数同样拒绝，不被 Number() 静默舍入', async () => {
+    const user = userEvent.setup();
+    await runBaseline(user);
+
+    // 1e16 = 10,000,000,000,000,000 > 2^53−1
+    await fillAndEvaluate(user, '1e16', '500.000');
+
+    const errorPanel = await screen.findByTestId('candidate-error');
+    const items = within(errorPanel).getAllByTestId('error-item');
+    expect(items).toHaveLength(1);
+    expect(items[0]).toHaveTextContent('candidate.id');
+    expect(items[0]).toHaveTextContent('安全整数');
+    const candidateCalls = fetch.mock.calls.filter(([url]) => url === '/api/candidate');
+    expect(candidateCalls).toHaveLength(0);
+  });
+
+  it('安全整数边界编号 2^53−1 照常发送评估', async () => {
+    const user = userEvent.setup();
+    await runBaseline(user);
+
+    await fillAndEvaluate(user, '9007199254740991', '500.000');
+    await waitFor(() =>
+      expect(screen.getByTestId('candidate-safe')).toBeInTheDocument(),
+    );
+    const candidateCall = fetch.mock.calls.find(([url]) => url === '/api/candidate');
+    expect(JSON.parse(candidateCall[1].body).candidate.id).toBe(9007199254740991);
+  });
 });

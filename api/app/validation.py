@@ -15,11 +15,27 @@ MIN_CHANNELS = 2
 MAX_CHANNELS = 64
 # 频率解析容差（kHz），只用于吸收十进制浮点表示误差
 _FREQUENCY_EPSILON_KHZ = 1e-6
+# 编号必须能被浏览器/JSON 数字精确表示：超过该范围的整数在 JavaScript 中
+# 会被静默舍入成相邻整数，故前后端一致拒绝（±(2^53−1)）
+MAX_SAFE_INTEGER = 2**53 - 1
 
 
 def is_int(value: Any) -> bool:
     """严格判定整数（bool 不算整数）。"""
     return isinstance(value, int) and not isinstance(value, bool)
+
+
+def is_safe_integer(value: Any) -> bool:
+    """判定可被浏览器精确表示的整数（bool 不算，超出安全整数范围不算）。"""
+    return is_int(value) and abs(value) <= MAX_SAFE_INTEGER
+
+
+def unsafe_id_error(channel_id: int) -> str:
+    return (
+        f"频道编号 {channel_id} 超出安全整数范围，"
+        f"绝对值不能超过 {MAX_SAFE_INTEGER}（2^53−1），"
+        f"否则浏览器与 JSON 无法精确表示该编号"
+    )
 
 
 def is_number(value: Any) -> bool:
@@ -107,11 +123,18 @@ def validate_channels(payload: Any) -> tuple[list[tuple[int, int]], list[dict]]:
             continue
 
         channel_id = item["id"]
+        id_ok = False
         if not is_int(channel_id):
             errors.append(
                 {"index": index, "field": "id",
                  "message": "频道编号必须是整数"}
             )
+        elif not is_safe_integer(channel_id):
+            errors.append(
+                {"index": index, "field": "id",
+                 "message": unsafe_id_error(channel_id)}
+            )
+            seen_ids.add(channel_id)
         elif channel_id in seen_ids:
             errors.append(
                 {"index": index, "field": "id",
@@ -120,6 +143,7 @@ def validate_channels(payload: Any) -> tuple[list[tuple[int, int]], list[dict]]:
             seen_ids.add(channel_id)
         else:
             seen_ids.add(channel_id)
+            id_ok = True
 
         frequency = item["frequency"]
         khz, frequency_error = check_frequency(frequency)
@@ -128,12 +152,30 @@ def validate_channels(payload: Any) -> tuple[list[tuple[int, int]], list[dict]]:
                 {"index": index, "field": "frequency", "message": frequency_error}
             )
 
-        if is_int(channel_id) and khz is not None:
+        if id_ok and khz is not None:
             channels.append((channel_id, khz))
 
     if errors:
         return [], errors
     return channels, []
+
+
+def extract_channel_ids(payload: Any) -> set[int]:
+    """从原始频道数组收集所有可识别的整数编号（忽略结构非法项）。
+
+    基线校验失败时 :func:`validate_channels` 会把 channels 置空；候选编号的
+    重复判定仍需看到请求里**现有**的编号，因此直接从原始负载提取，
+    保证基线频率非法与候选编号重复能在同一次 422 中同时定位。
+    """
+    ids: set[int] = set()
+    if not isinstance(payload, list):
+        return ids
+    for item in payload:
+        if isinstance(item, dict):
+            value = item.get("id")
+            if is_int(value):
+                ids.add(value)
+    return ids
 
 
 def validate_candidate(
@@ -173,6 +215,11 @@ def validate_candidate(
         errors.append(
             {"index": None, "field": "candidate.id",
              "message": "频道编号必须是整数"}
+        )
+    elif not is_safe_integer(candidate_id):
+        errors.append(
+            {"index": None, "field": "candidate.id",
+             "message": unsafe_id_error(candidate_id)}
         )
     elif candidate_id in existing_ids:
         errors.append(

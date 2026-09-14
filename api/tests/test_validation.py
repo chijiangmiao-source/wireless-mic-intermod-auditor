@@ -56,6 +56,32 @@ def test_duplicate_ids_rejected():
     assert any("重复" in e["message"] for e in errors)
 
 
+@pytest.mark.parametrize("channel_id", [2**53, 2**53 + 1, -(2**53)])
+def test_ids_beyond_safe_integer_range_rejected(channel_id):
+    payload = [
+        {"id": 1, "frequency": 470.0},
+        {"id": channel_id, "frequency": 480.0},
+    ]
+    channels, errors = validate_channels(payload)
+    matched = [e for e in errors if e["index"] == 1 and e["field"] == "id"]
+    assert matched, errors
+    assert any("安全整数" in e["message"] for e in matched)
+    # 越界编号不得进入 channels
+    assert all(cid != channel_id for cid, _khz in channels)
+    assert channels == []
+
+
+@pytest.mark.parametrize("channel_id", [2**53 - 1, -(2**53 - 1)])
+def test_safe_integer_boundary_ids_accepted(channel_id):
+    payload = [
+        {"id": 1, "frequency": 470.0},
+        {"id": channel_id, "frequency": 480.0},
+    ]
+    channels, errors = validate_channels(payload)
+    assert errors == []
+    assert channels == [(1, 470_000), (channel_id, 480_000)]
+
+
 def test_non_finite_frequency_rejected():
     for bad in (float("nan"), float("inf"), float("-inf")):
         payload = [
