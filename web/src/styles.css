@@ -132,4 +132,44 @@ th { background: #11182a; }
 .channel-details { margin: 16px 0; }
 .channel-table { max-width: 360px; }
 
+.panel.candidate { border-color: var(--accent); }
+.candidate-hint { color: var(--muted); font-size: 14px; margin-top: -4px; }
+.candidate-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin: 12px 0 4px;
+}
+.candidate-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.candidate-form input {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 8px 12px;
+  font-size: 14px;
+  width: 160px;
+}
+.candidate-form input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.candidate-safe, .candidate-conflict, .candidate-error {
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-top: 14px;
+}
+.candidate-safe h3, .candidate-conflict h3 { margin: 0 0 6px; font-size: 16px; }
+.candidate-safe { background: var(--ok-bg); border: 1px solid var(--ok); }
+.candidate-safe h3 { color: var(--ok); }
+.candidate-conflict { background: var(--panel-2); border: 1px solid var(--warn); }
+.candidate-conflict h3 { color: var(--warn); }
+.candidate-error { background: var(--err-bg); border: 1px solid var(--err); }
+.candidate-error p { margin: 0; }
+
 code { background: var(--panel-2); padding: 1px 6px; border-radius: 4px; }

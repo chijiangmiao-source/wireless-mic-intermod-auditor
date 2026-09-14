@@ -36,6 +36,21 @@
 上例中 `2×500.000 − 480.000 = 520.000 MHz`，恰好落在频道 #33 的接收通道，
 页面明确显示 **冲突（CONFLICT）**；无任何命中时显示 **可用（CLEAR）**。
 
+## 候选频点评估（上电前预检）
+
+完成一次基线分析后，可在同页填写一只待加入话筒的**编号**与**频率**，
+点击「评估候选频点」。后端把候选加入基线重新做整批整数 kHz 计算，
+以 **（受影响频道，来源对，产物）** 为规范身份对加入前后的冲突做**确定性差集**，
+只返回候选结论与**新增**冲突：
+
+- **可安全加入**：候选不引入任何新增冲突，可直接上电；
+- **新增 N 处冲突**：逐条列出计算式与三只频道，候选无论是来源还是
+  受影响频道都可追溯。
+
+候选编号与现有频道重复、频率越界或偏离 25 kHz 刻度时，接口按与整批校验
+相同的错误结构返回（`field` 以 `candidate.id` / `candidate.frequency` 定位），
+页面清除本次候选结论并展示字段错误，**已完成的基线分析保持不变**。
+
 可用方案示例：
 
 ```json
@@ -58,9 +73,11 @@
 ## 架构
 
 ```
-web/   React 18 + Vite（上传、逐项错误、CLEAR/CONFLICT 结论、冲突追溯、JSON 下载）
+web/   React 18 + Vite（上传、逐项错误、CLEAR/CONFLICT 结论、冲突追溯、
+       候选频点评估、JSON 下载）
        生产镜像为 nginx 静态站点，/api 反代到 api 服务
-api/   FastAPI（/api/conflicts 计算 + 校验，整数 kHz 运算）
+api/   FastAPI（/api/conflicts 整批计算 + /api/candidate 候选影响评估，
+       整数 kHz 运算）
 ```
 
 前端只做展示与文件读取，所有计算由 FastAPI 以整数 kHz 完成，无固定响应、无占位实现。
@@ -113,9 +130,9 @@ npm run dev          # http://localhost:5173 ，/api 已代理到 8000
 
 | 测试 | 位置 | 覆盖内容 |
 | --- | --- | --- |
-| **pytest** | `api/tests` | 整数 kHz 互调计算、75 kHz 含边界、排序、去重、镜像冲突；全部 422 校验；经 ASGI 的真实 HTTP API 请求 |
-| **Vitest** | `web/src/**/*.test.*` | 格式化与下载载荷；React 组件的 CLEAR/CONFLICT 展示、旧结论清除、逐项错误、冲突追溯 |
-| **Playwright** | `web/e2e` | 真实浏览器上传文件、结论展示、逐条冲突追溯、JSON 下载；以及经 nginx 代理的真实 HTTP API 请求 |
+| **pytest** | `api/tests` | 整数 kHz 互调计算、75 kHz 含边界、排序、去重、镜像冲突；全部 422 校验；候选评估的安全/新增冲突/非法候选链路与确定性差集；经 ASGI 的真实 HTTP API 请求 |
+| **Vitest** | `web/src/**/*.test.*` | 格式化与下载载荷；React 组件的 CLEAR/CONFLICT 展示、旧结论清除、逐项错误、冲突追溯；候选安全/新增冲突/非法候选保留基线 |
+| **Playwright** | `web/e2e` | 真实浏览器上传文件、结论展示、逐条冲突追溯、候选评估三条链路、JSON 下载；以及经 nginx 代理的真实 HTTP API 请求 |
 
 ```bash
 # 后端
@@ -174,3 +191,42 @@ PLAYWRIGHT_BASE_URL=http://localhost:8080 npx playwright test
 
 页面「下载分析结果 JSON」导出的文件同时包含 `input_channels`（输入）与
 `conflicts`（冲突明细）。
+
+`POST /api/candidate`
+
+请求体为基线频道数组加单个候选频道：
+
+```json
+{
+  "channels": [
+    { "id": 1, "frequency": 470.000 },
+    { "id": 2, "frequency": 600.000 },
+    { "id": 3, "frequency": 690.000 }
+  ],
+  "candidate": { "id": 4, "frequency": 535.000 }
+}
+```
+
+成功时只返回候选结论与新增冲突（`new_conflicts` 中每条的结构与
+`/api/conflicts` 的冲突明细一致，含计算式与三只频道）：
+
+```json
+{
+  "status": "conflict",
+  "candidate": { "id": 4, "frequency_khz": 535000, "frequency_mhz": 535.0 },
+  "new_conflict_count": 2,
+  "new_conflicts": [ ... ]
+}
+```
+
+无新增冲突时 `status` 为 `safe`、`new_conflicts` 为空。候选非法时返回 422，
+错误项的 `field` 为 `candidate.id` / `candidate.frequency`：
+
+```json
+{
+  "message": "候选评估请求校验未通过",
+  "errors": [
+    { "index": null, "field": "candidate.id", "message": "候选编号 2 与现有频道重复，每个编号必须唯一" }
+  ]
+}
+```

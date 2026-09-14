@@ -58,4 +58,21 @@ describe('buildDownloadPayload', () => {
     expect(payload.status).toBe('conflict');
     expect(typeof payload.generated_at).toBe('string');
   });
+
+  it('下载载荷结构固定，不含任何候选字段', () => {
+    const payload = buildDownloadPayload([{ id: 1, frequency: 480 }], {
+      status: 'clear',
+      channel_count: 1,
+      conflict_count: 0,
+      conflicts: [],
+    });
+    expect(Object.keys(payload).sort()).toEqual([
+      'channel_count',
+      'conflict_count',
+      'conflicts',
+      'generated_at',
+      'input_channels',
+      'status',
+    ]);
+  });
 });

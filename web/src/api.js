@@ -1,11 +1,11 @@
-// 与后端 /api/conflicts 通信：直接发送文件原文，由后端做全部整数 kHz 计算。
-export async function analyzeChannels(rawText) {
+// 与后端通信：直接发送 JSON 原文，由后端做全部整数 kHz 计算。
+async function post(url, bodyText) {
   let response;
   try {
-    response = await fetch('/api/conflicts', {
+    response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: rawText,
+      body: bodyText,
     });
   } catch (networkError) {
     return {
@@ -40,4 +40,14 @@ export async function analyzeChannels(rawText) {
     };
   }
   return { ok: true, status: 200, body };
+}
+
+// 基线分析：发送文件原文到 /api/conflicts。
+export function analyzeChannels(rawText) {
+  return post('/api/conflicts', rawText);
+}
+
+// 候选评估：基线频道数组 + 单个候选频道，只返回候选结论与新增冲突。
+export function evaluateCandidate(channels, candidate) {
+  return post('/api/candidate', JSON.stringify({ channels, candidate }));
 }

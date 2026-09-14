@@ -109,6 +109,20 @@ def find_conflicts(channels: Iterable[tuple[Any, int]]) -> list[dict[str, Any]]:
     return conflicts
 
 
+def conflict_identity(conflict: dict[str, Any]) -> tuple[int, Any, Any, Any]:
+    """冲突的规范身份：产物 + 来源对（编号升序）+ 受影响频道。
+
+    与 :func:`find_conflicts` 的去重键一致，用于候选评估时对加入前后的
+    冲突做确定性差集。
+    """
+    return (
+        conflict["product_khz"],
+        conflict["sources"][0]["id"],
+        conflict["sources"][1]["id"],
+        conflict["victim"]["id"],
+    )
+
+
 def _format_mhz(khz: int) -> str:
     """整数 kHz 格式化为三位小数 MHz 字符串。"""
     sign = "-" if khz < 0 else ""

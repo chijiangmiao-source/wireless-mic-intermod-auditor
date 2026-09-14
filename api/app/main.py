@@ -10,8 +10,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from .im3 import find_conflicts
-from .validation import validate_channels
+from .im3 import conflict_identity, find_conflicts
+from .validation import validate_candidate, validate_channels
 
 app = FastAPI(
     title="无线话筒三阶互调频率协调 API",
@@ -32,11 +32,11 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/api/conflicts")
-async def analyze(request: Request) -> JSONResponse:
+async def _parse_json_body(request: Request) -> tuple[Any, JSONResponse | None]:
+    """读取并解析 JSON 请求体；失败时返回现成的 422 响应。"""
     raw = await request.body()
     if not raw.strip():
-        return JSONResponse(
+        return None, JSONResponse(
             status_code=422,
             content={
                 "message": "请求体为空，必须提交 JSON 频道数组",
@@ -44,13 +44,14 @@ async def analyze(request: Request) -> JSONResponse:
                             "message": "请求体为空，必须提交 JSON 频道数组"}],
             },
         )
+
     def _reject_non_finite(constant: str) -> None:
         raise ValueError(f"非法 JSON 常量 {constant}：频率与编号必须是有限数值")
 
     try:
         payload: Any = json.loads(raw.decode("utf-8"), parse_constant=_reject_non_finite)
     except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
-        return JSONResponse(
+        return None, JSONResponse(
             status_code=422,
             content={
                 "message": f"JSON 无法解析：{exc}",
@@ -58,6 +59,14 @@ async def analyze(request: Request) -> JSONResponse:
                             "message": f"JSON 无法解析：{exc}"}],
             },
         )
+    return payload, None
+
+
+@app.post("/api/conflicts")
+async def analyze(request: Request) -> JSONResponse:
+    payload, error_response = await _parse_json_body(request)
+    if error_response is not None:
+        return error_response
 
     channels, errors = validate_channels(payload)
     if errors:
@@ -79,6 +88,82 @@ async def analyze(request: Request) -> JSONResponse:
             ],
             "conflict_count": len(conflicts),
             "conflicts": conflicts,
+        },
+    )
+
+
+@app.post("/api/candidate")
+async def candidate_impact(request: Request) -> JSONResponse:
+    """评估单个候选频道加入后会**新增**哪些三阶互调冲突。
+
+    请求体为 ``{"channels": [...], "candidate": {"id": ..., "frequency": ...}}``。
+    复用整批校验与整数 kHz 计算，以 (受影响频道, 来源对, 产物) 为规范身份
+    对加入前后的冲突做确定性差集，只返回候选结论与新增冲突。
+    """
+    payload, error_response = await _parse_json_body(request)
+    if error_response is not None:
+        return error_response
+
+    if not isinstance(payload, dict):
+        return JSONResponse(
+            status_code=422,
+            content={
+                "message": "请求体必须是包含 channels 与 candidate 的对象",
+                "errors": [{"index": None, "field": None,
+                            "message": "请求体必须是包含 channels 与 candidate 的对象，"
+                                       "例如 {\"channels\": [...], "
+                                       "\"candidate\": {\"id\": 4, \"frequency\": 500.000}}"}],
+            },
+        )
+
+    structural_errors: list[dict] = []
+    extra_keys = sorted(set(payload.keys()) - {"channels", "candidate"})
+    if extra_keys:
+        structural_errors.append(
+            {"index": None, "field": None,
+             "message": f"存在非法字段 {extra_keys}，顶层只允许 channels 与 candidate"}
+        )
+    for key in ("channels", "candidate"):
+        if key not in payload:
+            structural_errors.append(
+                {"index": None, "field": key, "message": "缺少必填字段"}
+            )
+    if structural_errors:
+        return JSONResponse(
+            status_code=422,
+            content={"message": "候选评估请求校验未通过", "errors": structural_errors},
+        )
+
+    channels, errors = validate_channels(payload["channels"])
+    candidate, candidate_errors = validate_candidate(
+        payload["candidate"], {channel_id for channel_id, _ in channels}
+    )
+    errors.extend(candidate_errors)
+    if errors:
+        return JSONResponse(
+            status_code=422,
+            content={"message": "候选评估请求校验未通过", "errors": errors},
+        )
+
+    baseline_identities = {
+        conflict_identity(conflict) for conflict in find_conflicts(channels)
+    }
+    after_conflicts = find_conflicts([*channels, candidate])
+    new_conflicts = [
+        conflict for conflict in after_conflicts
+        if conflict_identity(conflict) not in baseline_identities
+    ]
+
+    candidate_id, candidate_khz = candidate
+    return JSONResponse(
+        status_code=200,
+        content={
+            "status": "conflict" if new_conflicts else "safe",
+            "candidate": {"id": candidate_id,
+                          "frequency_khz": candidate_khz,
+                          "frequency_mhz": candidate_khz / 1000},
+            "new_conflict_count": len(new_conflicts),
+            "new_conflicts": new_conflicts,
         },
     )
 

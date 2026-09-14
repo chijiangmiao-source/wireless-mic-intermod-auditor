@@ -1,5 +1,5 @@
 import React, { useCallback, useRef, useState } from 'react';
-import { analyzeChannels } from './api.js';
+import { analyzeChannels, evaluateCandidate } from './api.js';
 import {
   buildDownloadPayload,
   formatMHz,
@@ -13,6 +13,14 @@ const SAMPLE_JSON = `[
   { "id": 33, "frequency": 520.000 }
 ]`;
 
+// 候选输入框的文本转 JSON 数值；空文本与非数值交给后端按字段错误定位
+function parseCandidateField(text) {
+  const trimmed = text.trim();
+  if (trimmed === '') return null;
+  const value = Number(trimmed);
+  return Number.isFinite(value) ? value : null;
+}
+
 export default function App() {
   const [fileName, setFileName] = useState('');
   const [rawText, setRawText] = useState('');
@@ -21,14 +29,31 @@ export default function App() {
   const [errors, setErrors] = useState([]);
   const [formError, setFormError] = useState('');
   const [pending, setPending] = useState(false);
+  // 候选评估拥有独立状态：候选失败绝不清除已完成的基线分析
+  const [candidateIdText, setCandidateIdText] = useState('');
+  const [candidateFreqText, setCandidateFreqText] = useState('');
+  // candidateResult: null | { kind: 'safe'|'conflict', body }
+  const [candidateResult, setCandidateResult] = useState(null);
+  const [candidateErrors, setCandidateErrors] = useState([]);
+  const [candidateFormError, setCandidateFormError] = useState('');
+  const [candidatePending, setCandidatePending] = useState(false);
   const fileInputRef = useRef(null);
 
-  // 任何新的提交都先清除旧结论与旧错误
+  const resetCandidate = useCallback(() => {
+    setCandidateIdText('');
+    setCandidateFreqText('');
+    setCandidateResult(null);
+    setCandidateErrors([]);
+    setCandidateFormError('');
+  }, []);
+
+  // 任何新的基线提交都先清除旧结论、旧错误与候选评估
   const resetConclusion = useCallback(() => {
     setResult(null);
     setErrors([]);
     setFormError('');
-  }, []);
+    resetCandidate();
+  }, [resetCandidate]);
 
   const handleFile = useCallback(
     async (file) => {
@@ -74,6 +99,38 @@ export default function App() {
     await submit(SAMPLE_JSON);
   };
 
+  // 候选评估只影响候选区：先清除本次候选结论，保留基线分析
+  const onEvaluateCandidate = async () => {
+    setCandidateResult(null);
+    setCandidateErrors([]);
+    setCandidateFormError('');
+
+    const input = parseInputSafely(rawText);
+    if (!Array.isArray(input)) {
+      setCandidateFormError('基线输入不可用，请重新上传频道 JSON 文件');
+      return;
+    }
+
+    setCandidatePending(true);
+    try {
+      const outcome = await evaluateCandidate(input, {
+        id: parseCandidateField(candidateIdText),
+        frequency: parseCandidateField(candidateFreqText),
+      });
+      if (outcome.ok) {
+        setCandidateResult({
+          kind: outcome.body.status === 'safe' ? 'safe' : 'conflict',
+          body: outcome.body,
+        });
+      } else {
+        setCandidateErrors(outcome.errors);
+        setCandidateFormError(outcome.message);
+      }
+    } finally {
+      setCandidatePending(false);
+    }
+  };
+
   const onDownload = () => {
     if (!result) return;
     const payload = buildDownloadPayload(parseInputSafely(rawText), result.body);
@@ -87,6 +144,8 @@ export default function App() {
     a.click();
     URL.revokeObjectURL(url);
   };
+
+  const busy = pending || candidatePending;
 
   return (
     <main className="page">
@@ -107,13 +166,13 @@ export default function App() {
           type="file"
           accept="application/json,.json"
           onChange={onInputChange}
-          disabled={pending}
+          disabled={busy}
         />
         <button
           type="button"
           data-testid="sample-button"
           onClick={onAnalyzeSample}
-          disabled={pending}
+          disabled={busy}
         >
           使用示例数据分析
         </button>
@@ -134,6 +193,21 @@ export default function App() {
       )}
       {result && result.kind === 'conflict' && (
         <ConflictPanel body={result.body} onDownload={onDownload} />
+      )}
+
+      {result && (
+        <CandidateSection
+          idText={candidateIdText}
+          freqText={candidateFreqText}
+          onIdChange={setCandidateIdText}
+          onFreqChange={setCandidateFreqText}
+          onEvaluate={onEvaluateCandidate}
+          pending={candidatePending}
+          busy={busy}
+          result={candidateResult}
+          errors={candidateErrors}
+          formError={candidateFormError}
+        />
       )}
 
       {!result && !formError && (
@@ -203,47 +277,7 @@ function ConflictPanel({ body, onDownload }) {
 
       <ol className="conflict-list" data-testid="conflict-list">
         {body.conflicts.map((c, idx) => (
-          <li key={idx} className="conflict-card" data-testid="conflict-item">
-            <div className="conflict-head">
-              <span className="badge">受影响频道 #{c.victim.id}</span>
-              <span className="freq">接收频率 {formatMHzWithUnit(c.victim.frequency_khz)}</span>
-              <span className="distance">
-                产物偏差 {c.distance_khz} kHz ＝ {(c.distance_khz / 1000).toFixed(3)} MHz
-              </span>
-            </div>
-            <p className="formula" data-testid="conflict-formula">
-              计算式：{c.formula}
-            </p>
-            <p className="product">
-              互调产物频率：<strong>{formatMHzWithUnit(c.product_khz)}</strong>
-            </p>
-            <table className="three-channels" data-testid="three-channels">
-              <thead>
-                <tr>
-                  <th>角色</th>
-                  <th>频道编号</th>
-                  <th>频率</th>
-                  <th>系数</th>
-                </tr>
-              </thead>
-              <tbody>
-                {c.sources.map((s) => (
-                  <tr key={s.id} className="row-source">
-                    <td>来源（发射机）</td>
-                    <td>#{s.id}</td>
-                    <td>{formatMHzWithUnit(s.frequency_khz)}</td>
-                    <td>×{s.coefficient}</td>
-                  </tr>
-                ))}
-                <tr className="row-victim">
-                  <td>受影响（接收机）</td>
-                  <td>#{c.victim.id}</td>
-                  <td>{formatMHzWithUnit(c.victim.frequency_khz)}</td>
-                  <td>—</td>
-                </tr>
-              </tbody>
-            </table>
-          </li>
+          <ConflictCard key={idx} conflict={c} />
         ))}
       </ol>
 
@@ -252,6 +286,147 @@ function ConflictPanel({ body, onDownload }) {
         下载分析结果 JSON（含输入与冲突明细）
       </button>
     </section>
+  );
+}
+
+function CandidateSection({
+  idText,
+  freqText,
+  onIdChange,
+  onFreqChange,
+  onEvaluate,
+  pending,
+  busy,
+  result,
+  errors,
+  formError,
+}) {
+  return (
+    <section className="panel candidate" data-testid="candidate-panel" aria-label="候选频点评估">
+      <h2>候选频点评估</h2>
+      <p className="candidate-hint">
+        基线分析已完成。填写待加入话筒的编号与频率，先确认它不会引入新的三阶互调，
+        再决定上电。
+      </p>
+      <div className="candidate-form">
+        <label>
+          候选编号
+          <input
+            type="text"
+            inputMode="numeric"
+            data-testid="candidate-id-input"
+            placeholder="如 44"
+            value={idText}
+            onChange={(e) => onIdChange(e.target.value)}
+            disabled={busy}
+          />
+        </label>
+        <label>
+          候选频率 (MHz)
+          <input
+            type="text"
+            inputMode="decimal"
+            data-testid="candidate-frequency-input"
+            placeholder="如 535.000"
+            value={freqText}
+            onChange={(e) => onFreqChange(e.target.value)}
+            disabled={busy}
+          />
+        </label>
+        <button
+          type="button"
+          data-testid="candidate-evaluate-button"
+          onClick={onEvaluate}
+          disabled={busy}
+        >
+          评估候选频点
+        </button>
+        {pending && <span className="pending" data-testid="candidate-pending">评估中…</span>}
+      </div>
+
+      {formError && (
+        <div className="candidate-error" data-testid="candidate-error" role="alert">
+          <p>{formError}</p>
+          {errors.length > 0 && <ErrorList errors={errors} />}
+        </div>
+      )}
+
+      {result && result.kind === 'safe' && (
+        <div className="candidate-safe" data-testid="candidate-safe" role="status">
+          <h3>✅ 可安全加入</h3>
+          <p>
+            候选频道 <strong>#{result.body.candidate.id}</strong>（
+            {formatMHzWithUnit(result.body.candidate.frequency_khz)}）
+            不会引入新的三阶互调冲突，可上电加入当前方案。
+          </p>
+        </div>
+      )}
+
+      {result && result.kind === 'conflict' && (
+        <div className="candidate-conflict" data-testid="candidate-conflict" role="alert">
+          <h3>⚠️ 候选将引入新增冲突</h3>
+          <p>
+            候选频道 <strong>#{result.body.candidate.id}</strong>（
+            {formatMHzWithUnit(result.body.candidate.frequency_khz)}）加入后将新增{' '}
+            <strong data-testid="candidate-conflict-count">
+              {result.body.new_conflict_count}
+            </strong>{' '}
+            处三阶互调冲突，上电前请调整。以下仅为新增冲突，不含基线已有冲突。
+          </p>
+          <ol className="conflict-list" data-testid="candidate-conflict-list">
+            {result.body.new_conflicts.map((c, idx) => (
+              <ConflictCard key={idx} conflict={c} />
+            ))}
+          </ol>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ConflictCard({ conflict: c }) {
+  return (
+    <li className="conflict-card" data-testid="conflict-item">
+      <div className="conflict-head">
+        <span className="badge">受影响频道 #{c.victim.id}</span>
+        <span className="freq">接收频率 {formatMHzWithUnit(c.victim.frequency_khz)}</span>
+        <span className="distance">
+          产物偏差 {c.distance_khz} kHz ＝ {(c.distance_khz / 1000).toFixed(3)} MHz
+        </span>
+      </div>
+      <p className="formula" data-testid="conflict-formula">
+        计算式：{c.formula}
+      </p>
+      <p className="product">
+        互调产物频率：<strong>{formatMHzWithUnit(c.product_khz)}</strong>
+      </p>
+      <table className="three-channels" data-testid="three-channels">
+        <thead>
+          <tr>
+            <th>角色</th>
+            <th>频道编号</th>
+            <th>频率</th>
+            <th>系数</th>
+          </tr>
+        </thead>
+        <tbody>
+          {c.sources.map((s) => (
+            <tr key={s.id} className="row-source">
+              <td>来源（发射机）</td>
+              <td>#{s.id}</td>
+              <td>{formatMHzWithUnit(s.frequency_khz)}</td>
+              <td>×{s.coefficient}</td>
+            </tr>
+          ))}
+          <tr className="row-victim">
+            <td>受影响（接收机）</td>
+            <td>#{c.victim.id}</td>
+            <td>{formatMHzWithUnit(c.victim.frequency_khz)}</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+    </li>
   );
 }
 
