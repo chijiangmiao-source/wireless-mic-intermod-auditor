@@ -130,7 +130,22 @@ th { background: #11182a; }
 .row-victim td { background: rgba(255, 93, 108, 0.12); font-weight: 600; }
 
 .channel-details { margin: 16px 0; }
-.channel-table { max-width: 360px; }
+.channel-table { max-width: 560px; }
+.channel-row--interactive { cursor: pointer; }
+.channel-row--interactive:hover td { background: rgba(124, 156, 255, 0.10); }
+.channel-row--interactive:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.channel-row--selected td {
+  background: rgba(124, 156, 255, 0.20);
+  font-weight: 600;
+}
+
+.channel-filter {
+  border: 1px solid var(--accent);
+  background: rgba(124, 156, 255, 0.12);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 14px;
+}
 
 .panel.candidate { border-color: var(--accent); }
 .candidate-hint { color: var(--muted); font-size: 14px; margin-top: -4px; }

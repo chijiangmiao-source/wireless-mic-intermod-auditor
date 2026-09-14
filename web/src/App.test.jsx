@@ -9,8 +9,8 @@ const clearBody = {
   conflict_count: 0,
   conflicts: [],
   channels: [
-    { id: 1, frequency_khz: 470000, frequency_mhz: 470.0 },
-    { id: 2, frequency_khz: 600000, frequency_mhz: 600.0 },
+    { id: 1, frequency_khz: 470000, frequency_mhz: 470.0, source_count: 0, victim_count: 0, role: 'none' },
+    { id: 2, frequency_khz: 600000, frequency_mhz: 600.0, source_count: 0, victim_count: 0, role: 'none' },
   ],
 };
 
@@ -19,9 +19,9 @@ const conflictBody = {
   channel_count: 3,
   conflict_count: 2,
   channels: [
-    { id: 11, frequency_khz: 480000, frequency_mhz: 480.0 },
-    { id: 22, frequency_khz: 500000, frequency_mhz: 500.0 },
-    { id: 33, frequency_khz: 520000, frequency_mhz: 520.0 },
+    { id: 11, frequency_khz: 480000, frequency_mhz: 480.0, source_count: 1, victim_count: 1, role: 'both' },
+    { id: 22, frequency_khz: 500000, frequency_mhz: 500.0, source_count: 2, victim_count: 0, role: 'source' },
+    { id: 33, frequency_khz: 520000, frequency_mhz: 520.0, source_count: 1, victim_count: 1, role: 'both' },
   ],
   conflicts: [
     {
@@ -533,5 +533,213 @@ describe('候选频点评估', () => {
     expect(items[0]).toHaveTextContent('必须是整数');
     const candidateCalls = fetch.mock.calls.filter(([url]) => url === '/api/candidate');
     expect(candidateCalls).toHaveLength(0);
+  });
+});
+
+describe('频道角色摘要与冲突收窄', () => {
+  // 5 频道 4 冲突：#1–#4 均为双重角色但参与冲突数不同，#5 与冲突无关，
+  // 使收窄过滤、角色标签与计数都有可区分的表现
+  const channelViewBody = {
+    status: 'conflict',
+    channel_count: 5,
+    conflict_count: 4,
+    channels: [
+      { id: 1, frequency_khz: 480000, frequency_mhz: 480.0, source_count: 1, victim_count: 1, role: 'both' },
+      { id: 2, frequency_khz: 500000, frequency_mhz: 500.0, source_count: 3, victim_count: 1, role: 'both' },
+      { id: 3, frequency_khz: 520000, frequency_mhz: 520.0, source_count: 3, victim_count: 1, role: 'both' },
+      { id: 4, frequency_khz: 540000, frequency_mhz: 540.0, source_count: 1, victim_count: 1, role: 'both' },
+      { id: 5, frequency_khz: 690000, frequency_mhz: 690.0, source_count: 0, victim_count: 0, role: 'none' },
+    ],
+    conflicts: [
+      {
+        victim: { id: 1, frequency_khz: 480000, frequency_mhz: 480.0 },
+        sources: [
+          { id: 2, frequency_khz: 500000, frequency_mhz: 500.0, coefficient: 2 },
+          { id: 3, frequency_khz: 520000, frequency_mhz: 520.0, coefficient: 1 },
+        ],
+        doubled_source_id: 2,
+        product_khz: 480000,
+        product_frequency_mhz: 480.0,
+        distance_khz: 0,
+        formula: '2×500.000 MHz − 520.000 MHz = 480.000 MHz（2f(频道2) − f(频道3)）',
+      },
+      {
+        victim: { id: 2, frequency_khz: 500000, frequency_mhz: 500.0 },
+        sources: [
+          { id: 3, frequency_khz: 520000, frequency_mhz: 520.0, coefficient: 2 },
+          { id: 4, frequency_khz: 540000, frequency_mhz: 540.0, coefficient: 1 },
+        ],
+        doubled_source_id: 3,
+        product_khz: 500000,
+        product_frequency_mhz: 500.0,
+        distance_khz: 0,
+        formula: '2×520.000 MHz − 540.000 MHz = 500.000 MHz（2f(频道3) − f(频道4)）',
+      },
+      {
+        victim: { id: 3, frequency_khz: 520000, frequency_mhz: 520.0 },
+        sources: [
+          { id: 1, frequency_khz: 480000, frequency_mhz: 480.0, coefficient: 1 },
+          { id: 2, frequency_khz: 500000, frequency_mhz: 500.0, coefficient: 2 },
+        ],
+        doubled_source_id: 2,
+        product_khz: 520000,
+        product_frequency_mhz: 520.0,
+        distance_khz: 0,
+        formula: '2×500.000 MHz − 480.000 MHz = 520.000 MHz（2f(频道2) − f(频道1)）',
+      },
+      {
+        victim: { id: 4, frequency_khz: 540000, frequency_mhz: 540.0 },
+        sources: [
+          { id: 2, frequency_khz: 500000, frequency_mhz: 500.0, coefficient: 1 },
+          { id: 3, frequency_khz: 520000, frequency_mhz: 520.0, coefficient: 2 },
+        ],
+        doubled_source_id: 3,
+        product_khz: 540000,
+        product_frequency_mhz: 540.0,
+        distance_khz: 0,
+        formula: '2×520.000 MHz − 500.000 MHz = 540.000 MHz（2f(频道3) − f(频道2)）',
+      },
+    ],
+  };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function runBaseline(user, body) {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(200, body)));
+    render(<App />);
+    await user.click(screen.getByTestId('sample-button'));
+    await waitFor(() =>
+      expect(screen.getByTestId('result-conflict')).toBeInTheDocument(),
+    );
+    // 展开频道表
+    await user.click(screen.getByText(/查看输入的 \d+ 个频道/));
+  }
+
+  it('频道表按冲突身份显示每只频道的角色与次数（双向归类）', async () => {
+    const user = userEvent.setup();
+    await runBaseline(user, conflictBody);
+
+    const rows = screen.getAllByTestId('channel-row');
+    expect(rows).toHaveLength(3);
+    const cells = (row) => within(row).getAllByRole('cell').map((c) => c.textContent);
+    // #11：来源 1 次 + 受影响 1 次 → 双重角色
+    expect(cells(rows[0])).toEqual(['#11', '480.000', '来源 + 受影响', '1', '1']);
+    // #22：仅来源，2 次
+    expect(cells(rows[1])).toEqual(['#22', '500.000', '来源', '2', '0']);
+    // #33：来源 1 次 + 受影响 1 次 → 双重角色
+    expect(cells(rows[2])).toEqual(['#33', '520.000', '来源 + 受影响', '1', '1']);
+  });
+
+  it('无冲突频道显示无冲突与零计数', async () => {
+    const user = userEvent.setup();
+    await runBaseline(user, channelViewBody);
+
+    const row5 = screen.getAllByTestId('channel-row')[4];
+    expect(within(row5).getAllByRole('cell').map((c) => c.textContent)).toEqual([
+      '#5', '690.000', '无冲突', '0', '0',
+    ]);
+  });
+
+  it('点击频道行只显示该频道参与的冲突（来源与受影响都算），再次点击恢复全部', async () => {
+    const user = userEvent.setup();
+    await runBaseline(user, channelViewBody);
+
+    // #1 参与 2 条：作为受影响（第一条）与作为来源（第三条）
+    await user.click(screen.getAllByTestId('channel-row')[0]);
+
+    const banner = screen.getByTestId('channel-filter-banner');
+    expect(banner).toHaveTextContent('#1');
+    expect(screen.getByTestId('filtered-conflict-count')).toHaveTextContent('2');
+    const narrowed = screen.getAllByTestId('conflict-item');
+    expect(narrowed).toHaveLength(2);
+    expect(narrowed[0]).toHaveTextContent('受影响频道 #1');
+    expect(narrowed[1]).toHaveTextContent('受影响频道 #3');
+
+    // 再次点击同一行：恢复全部明细
+    await user.click(screen.getAllByTestId('channel-row')[0]);
+    expect(screen.queryByTestId('channel-filter-banner')).not.toBeInTheDocument();
+    expect(screen.getAllByTestId('conflict-item')).toHaveLength(4);
+  });
+
+  it('收窄后的明细保持原始顺序，未参与频道收窄后为 0 条', async () => {
+    const user = userEvent.setup();
+    await runBaseline(user, channelViewBody);
+
+    // #4 参与第 2、4 条：收窄后顺序与原列表一致（受影响 #2 在前、#4 在后）
+    await user.click(screen.getAllByTestId('channel-row')[3]);
+    const items = screen.getAllByTestId('conflict-item');
+    expect(items).toHaveLength(2);
+    expect(items[0]).toHaveTextContent('受影响频道 #2');
+    expect(items[1]).toHaveTextContent('受影响频道 #4');
+
+    // #5 不参与任何冲突：收窄后 0 条，横幅如实显示
+    await user.click(screen.getAllByTestId('channel-row')[4]);
+    expect(screen.queryAllByTestId('conflict-item')).toHaveLength(0);
+    expect(screen.getByTestId('filtered-conflict-count')).toHaveTextContent('0');
+  });
+
+  it('上传新文件后旧选择与收窄视图立即失效', async () => {
+    const user = userEvent.setup();
+    await runBaseline(user, channelViewBody);
+    await user.click(screen.getAllByTestId('channel-row')[0]);
+    expect(screen.getAllByTestId('conflict-item')).toHaveLength(2);
+
+    // jsdom 的 File 未实现 .text()，在实例上补齐
+    const contents = JSON.stringify(
+      channelViewBody.channels.map((ch) => ({ id: ch.id, frequency: ch.frequency_mhz })),
+    );
+    const file = new File([contents], 'plan.json', { type: 'application/json' });
+    file.text = async () => contents;
+    await user.upload(screen.getByTestId('file-input'), file);
+
+    await waitFor(() =>
+      expect(screen.getAllByTestId('conflict-item')).toHaveLength(4),
+    );
+    expect(screen.queryByTestId('channel-filter-banner')).not.toBeInTheDocument();
+  });
+
+  it('重新分析示例后旧选择与收窄视图立即失效', async () => {
+    const user = userEvent.setup();
+    await runBaseline(user, channelViewBody);
+    await user.click(screen.getAllByTestId('channel-row')[0]);
+    expect(screen.getAllByTestId('conflict-item')).toHaveLength(2);
+
+    await user.click(screen.getByTestId('sample-button'));
+
+    await waitFor(() =>
+      expect(screen.getAllByTestId('conflict-item')).toHaveLength(4),
+    );
+    expect(screen.queryByTestId('channel-filter-banner')).not.toBeInTheDocument();
+  });
+
+  it('收窄状态下新输入校验失败：只展示逐项错误，不残留上一批频道或冲突', async () => {
+    const errorBody = {
+      message: '频道数据校验未通过',
+      errors: [
+        { index: 0, field: 'frequency', message: '频率 470.013 MHz 必须精确落在 0.025 MHz 刻度上' },
+        { index: 1, field: 'id', message: '频道编号 5 重复，每个编号必须唯一' },
+      ],
+    };
+    const user = userEvent.setup();
+    await runBaseline(user, channelViewBody);
+    await user.click(screen.getAllByTestId('channel-row')[0]);
+    expect(screen.getAllByTestId('conflict-item')).toHaveLength(2);
+
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(422, errorBody)));
+    await user.click(screen.getByTestId('sample-button'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('form-error')).toBeInTheDocument(),
+    );
+    // 上一批的频道表、冲突明细与收窄横幅全部清除，只剩逐项错误
+    expect(screen.queryAllByTestId('conflict-item')).toHaveLength(0);
+    expect(screen.queryAllByTestId('channel-row')).toHaveLength(0);
+    expect(screen.queryByTestId('channel-filter-banner')).not.toBeInTheDocument();
+    const items = screen.getAllByTestId('error-item');
+    expect(items).toHaveLength(2);
+    expect(items[0]).toHaveTextContent('0.025 MHz 刻度');
+    expect(items[1]).toHaveTextContent('编号 5 重复');
   });
 });

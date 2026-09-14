@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildDownloadPayload,
+  channelRoleLabel,
+  conflictInvolvesChannel,
   formatMHz,
   formatMHzWithUnit,
   summarizeStatus,
@@ -74,5 +76,39 @@ describe('buildDownloadPayload', () => {
       'input_channels',
       'status',
     ]);
+  });
+});
+
+describe('channelRoleLabel', () => {
+  it('按后端 role 取值给出中文标签', () => {
+    expect(channelRoleLabel('both')).toBe('来源 + 受影响');
+    expect(channelRoleLabel('source')).toBe('来源');
+    expect(channelRoleLabel('victim')).toBe('受影响');
+    expect(channelRoleLabel('none')).toBe('无冲突');
+  });
+
+  it('未知或缺失角色回退为破折号（兼容未返回摘要的旧客户端数据）', () => {
+    expect(channelRoleLabel(undefined)).toBe('—');
+    expect(channelRoleLabel('unexpected')).toBe('—');
+  });
+});
+
+describe('conflictInvolvesChannel', () => {
+  const conflict = {
+    victim: { id: 33 },
+    sources: [{ id: 11 }, { id: 22 }],
+  };
+
+  it('频道作为受影响频道或任一来源都算参与', () => {
+    expect(conflictInvolvesChannel(conflict, 33)).toBe(true);
+    expect(conflictInvolvesChannel(conflict, 11)).toBe(true);
+    expect(conflictInvolvesChannel(conflict, 22)).toBe(true);
+    expect(conflictInvolvesChannel(conflict, 44)).toBe(false);
+  });
+
+  it('畸形输入安全返回 false', () => {
+    expect(conflictInvolvesChannel(null, 11)).toBe(false);
+    expect(conflictInvolvesChannel({}, 11)).toBe(false);
+    expect(conflictInvolvesChannel({ victim: { id: 1 } }, 1)).toBe(true);
   });
 });

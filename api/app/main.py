@@ -10,7 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from .im3 import conflict_identity, find_conflicts
+from .im3 import conflict_identity, find_conflicts, summarize_channel_roles
 from .validation import extract_channel_ids, validate_candidate, validate_channels
 
 app = FastAPI(
@@ -76,6 +76,9 @@ async def analyze(request: Request) -> JSONResponse:
         )
 
     conflicts = find_conflicts(channels)
+    # 每个既有频道附加按规范冲突身份聚合的角色摘要（纯增量字段，
+    # 未读取摘要的客户端仍可只消费原有字段）
+    role_summary = summarize_channel_roles(channels, conflicts)
     return JSONResponse(
         status_code=200,
         content={
@@ -83,8 +86,11 @@ async def analyze(request: Request) -> JSONResponse:
             "channel_count": len(channels),
             "channels": [
                 {"id": channel_id, "frequency_khz": khz,
-                 "frequency_mhz": khz / 1000}
-                for channel_id, khz in channels
+                 "frequency_mhz": khz / 1000,
+                 "source_count": summary["source_count"],
+                 "victim_count": summary["victim_count"],
+                 "role": summary["role"]}
+                for (channel_id, khz), summary in zip(channels, role_summary)
             ],
             "conflict_count": len(conflicts),
             "conflicts": conflicts,

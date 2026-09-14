@@ -2,6 +2,8 @@ import React, { useCallback, useRef, useState } from 'react';
 import { analyzeChannels, evaluateCandidate } from './api.js';
 import {
   buildDownloadPayload,
+  channelRoleLabel,
+  conflictInvolvesChannel,
   formatMHz,
   formatMHzWithUnit,
   summarizeStatus,
@@ -79,6 +81,8 @@ export default function App() {
   const [candidateErrors, setCandidateErrors] = useState([]);
   const [candidateFormError, setCandidateFormError] = useState('');
   const [candidatePending, setCandidatePending] = useState(false);
+  // 频道表中当前选中的频道：选中时冲突列表只显示它参与的明细
+  const [selectedChannelId, setSelectedChannelId] = useState(null);
   const fileInputRef = useRef(null);
 
   const resetCandidate = useCallback(() => {
@@ -89,13 +93,20 @@ export default function App() {
     setCandidateFormError('');
   }, []);
 
-  // 任何新的基线提交都先清除旧结论、旧错误与候选评估
+  // 任何新的基线提交都先清除旧结论、旧错误、候选评估与频道选择：
+  // 旧选择对应的收窄视图随旧批次一起立即失效
   const resetConclusion = useCallback(() => {
     setResult(null);
     setErrors([]);
     setFormError('');
+    setSelectedChannelId(null);
     resetCandidate();
   }, [resetCandidate]);
+
+  // 点击频道行：选中则收窄到该频道参与的冲突；再次点击同一行恢复全部
+  const onToggleChannel = useCallback((channelId) => {
+    setSelectedChannelId((current) => (current === channelId ? null : channelId));
+  }, []);
 
   const handleFile = useCallback(
     async (file) => {
@@ -112,6 +123,8 @@ export default function App() {
   const onInputChange = (event) => {
     const file = event.target.files?.[0];
     if (file) handleFile(file);
+    // 清空输入值：再次选择同一文件也会触发 change，保证旧选择随之失效
+    event.target.value = '';
   };
 
   const submit = async (text) => {
@@ -260,7 +273,12 @@ export default function App() {
         <ClearPanel body={result.body} onDownload={onDownload} />
       )}
       {result && result.kind === 'conflict' && (
-        <ConflictPanel body={result.body} onDownload={onDownload} />
+        <ConflictPanel
+          body={result.body}
+          onDownload={onDownload}
+          selectedId={selectedChannelId}
+          onToggleChannel={onToggleChannel}
+        />
       )}
 
       {result && (
@@ -332,8 +350,12 @@ function ClearPanel({ body, onDownload }) {
   );
 }
 
-function ConflictPanel({ body, onDownload }) {
+function ConflictPanel({ body, onDownload, selectedId, onToggleChannel }) {
   const summary = summarizeStatus(body);
+  // 选中频道时只保留它参与的冲突；过滤不改变原始明细顺序
+  const visibleConflicts = selectedId == null
+    ? body.conflicts
+    : body.conflicts.filter((c) => conflictInvolvesChannel(c, selectedId));
   return (
     <section className="panel conflict" data-testid="result-conflict" role="alert">
       <h2>⚠️ 冲突（CONFLICT）</h2>
@@ -343,13 +365,25 @@ function ConflictPanel({ body, onDownload }) {
         处三阶互调冲突。发射机上电前请调整下列来源或受影响频道。
       </p>
 
+      {selectedId != null && (
+        <p className="channel-filter" data-testid="channel-filter-banner" role="status">
+          已收窄为与频道 <strong>#{selectedId}</strong> 直接相关的{' '}
+          <strong data-testid="filtered-conflict-count">{visibleConflicts.length}</strong>{' '}
+          条冲突（共 {body.conflicts.length} 条）。再次点击该频道行即可恢复全部。
+        </p>
+      )}
+
       <ol className="conflict-list" data-testid="conflict-list">
-        {body.conflicts.map((c, idx) => (
+        {visibleConflicts.map((c, idx) => (
           <ConflictCard key={idx} conflict={c} />
         ))}
       </ol>
 
-      <ChannelTable channels={body.channels} />
+      <ChannelTable
+        channels={body.channels}
+        selectedId={selectedId}
+        onToggleChannel={onToggleChannel}
+      />
       <button type="button" data-testid="download-button" onClick={onDownload}>
         下载分析结果 JSON（含输入与冲突明细）
       </button>
@@ -498,25 +532,60 @@ function ConflictCard({ conflict: c }) {
   );
 }
 
-function ChannelTable({ channels }) {
+function ChannelTable({ channels, selectedId = null, onToggleChannel = null }) {
   if (!channels?.length) return null;
+  // 冲突结果中传入 onToggleChannel：点击行收窄/恢复该频道的冲突明细
+  const interactive = typeof onToggleChannel === 'function';
   return (
     <details className="channel-details">
-      <summary>查看输入的 {channels.length} 个频道</summary>
+      <summary>
+        查看输入的 {channels.length} 个频道
+        {interactive ? '（点击行可只查看该频道参与的冲突）' : ''}
+      </summary>
       <table className="channel-table" data-testid="channel-table">
         <thead>
           <tr>
             <th>编号</th>
             <th>频率 (MHz)</th>
+            <th>角色</th>
+            <th>来源次数</th>
+            <th>受影响次数</th>
           </tr>
         </thead>
         <tbody>
-          {channels.map((ch) => (
-            <tr key={ch.id}>
-              <td>#{ch.id}</td>
-              <td>{formatMHz(ch.frequency_khz)}</td>
-            </tr>
-          ))}
+          {channels.map((ch) => {
+            const selected = interactive && ch.id === selectedId;
+            return (
+              <tr
+                key={ch.id}
+                data-testid="channel-row"
+                data-channel-id={ch.id}
+                className={[
+                  interactive ? 'channel-row--interactive' : '',
+                  selected ? 'channel-row--selected' : '',
+                ].filter(Boolean).join(' ') || undefined}
+                aria-pressed={interactive ? selected : undefined}
+                tabIndex={interactive ? 0 : undefined}
+                onClick={interactive ? () => onToggleChannel(ch.id) : undefined}
+                onKeyDown={
+                  interactive
+                    ? (e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          onToggleChannel(ch.id);
+                        }
+                      }
+                    : undefined
+                }
+              >
+                <td>#{ch.id}</td>
+                <td>{formatMHz(ch.frequency_khz)}</td>
+                <td data-testid="channel-role">{channelRoleLabel(ch.role)}</td>
+                <td>{ch.source_count ?? 0}</td>
+                <td>{ch.victim_count ?? 0}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </details>

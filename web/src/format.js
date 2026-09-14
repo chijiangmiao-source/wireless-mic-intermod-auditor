@@ -28,6 +28,28 @@ export function summarizeStatus(body) {
   return { kind: 'unknown' };
 }
 
+// 频道在整批冲突中的角色标签，取值与后端 summarize_channel_roles 一致
+const CHANNEL_ROLE_LABELS = {
+  both: '来源 + 受影响',
+  source: '来源',
+  victim: '受影响',
+  none: '无冲突',
+};
+
+export function channelRoleLabel(role) {
+  return CHANNEL_ROLE_LABELS[role] ?? '—';
+}
+
+// 频道是否参与某条冲突：作为受影响频道，或作为两只来源之一
+export function conflictInvolvesChannel(conflict, channelId) {
+  if (!conflict || typeof conflict !== 'object') return false;
+  if (conflict.victim?.id === channelId) return true;
+  return (
+    Array.isArray(conflict.sources)
+    && conflict.sources.some((s) => s.id === channelId)
+  );
+}
+
 export function buildDownloadPayload(input, body) {
   return {
     generated_at: new Date().toISOString(),

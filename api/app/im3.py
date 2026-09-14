@@ -109,6 +109,48 @@ def find_conflicts(channels: Iterable[tuple[Any, int]]) -> list[dict[str, Any]]:
     return conflicts
 
 
+def summarize_channel_roles(
+    channels: Iterable[tuple[Any, int]],
+    conflicts: Iterable[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """按频道聚合冲突身份：作为来源的次数、作为受影响频道的次数与角色。
+
+    计数以 :func:`find_conflicts` 去重后的冲突为单位：同一只频道在同一条
+    冲突里无论系数是 1 还是 2 都只计一次来源；同一只频道既作来源又作
+    受影响频道时两类计数各自独立累加（角色为 ``both``）。返回列表与
+    ``channels`` 顺序一致，每项为
+    ``{"id", "source_count", "victim_count", "role"}``。
+    """
+    chans = list(channels)
+    # 频道编号经校验唯一；[来源次数, 受影响次数]
+    counts: dict[Any, list[int]] = {channel_id: [0, 0] for channel_id, _ in chans}
+    for conflict in conflicts:
+        counts[conflict["victim"]["id"]][1] += 1
+        for source in conflict["sources"]:
+            counts[source["id"]][0] += 1
+
+    summary: list[dict[str, Any]] = []
+    for channel_id, _khz in chans:
+        source_count, victim_count = counts[channel_id]
+        if source_count and victim_count:
+            role = "both"
+        elif source_count:
+            role = "source"
+        elif victim_count:
+            role = "victim"
+        else:
+            role = "none"
+        summary.append(
+            {
+                "id": channel_id,
+                "source_count": source_count,
+                "victim_count": victim_count,
+                "role": role,
+            }
+        )
+    return summary
+
+
 def conflict_identity(conflict: dict[str, Any]) -> tuple[int, Any, Any, Any]:
     """冲突的规范身份：产物 + 来源对（编号升序）+ 受影响频道。
 

@@ -164,7 +164,16 @@ PLAYWRIGHT_BASE_URL=http://localhost:8080 npx playwright test
   "status": "conflict",
   "channel_count": 3,
   "conflict_count": 2,
-  "channels": [ ... ],
+  "channels": [
+    {
+      "id": 11,
+      "frequency_khz": 480000,
+      "frequency_mhz": 480.0,
+      "source_count": 1,
+      "victim_count": 1,
+      "role": "both"
+    }
+  ],
   "conflicts": [
     {
       "victim":  { "id": 33, "frequency_khz": 520000, "frequency_mhz": 520.0 },
@@ -181,6 +190,19 @@ PLAYWRIGHT_BASE_URL=http://localhost:8080 npx playwright test
   ]
 }
 ```
+
+`channels` 中每项在原有 `id` / `frequency_khz` / `frequency_mhz` 之外，
+附带按规范冲突身份聚合的角色摘要（纯增量字段，未读取摘要的客户端不受影响）：
+
+- `source_count` / `victim_count`：该频道作为互调**来源** / **受影响频道**
+  参与的（已去重）冲突条数；同一频道在同一条冲突里只计一次；
+- `role`：`source`（仅来源）、`victim`（仅受影响）、`both`（两者皆是）、
+  `none`（与冲突无关）。由于镜像性质（`2f_b−f_a` 命中 v 时 `2f_b−v` 必命中 a），
+  凡受影响频道必然也是某条冲突的来源，纯 `victim` 实际不会出现。
+
+结果页的频道表展示上述角色与次数；点击某一频道行可只查看该频道参与的
+冲突明细（来源与受影响两个方向都算），再次点击该行恢复全部。上传新文件
+或重新分析示例时，旧选择与收窄视图立即失效。
 
 422 返回：
 
